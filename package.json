@@ -1,0 +1,22 @@
+{
+  "name": "sluice",
+  "private": true,
+  "version": "0.1.0",
+  "description": "Sluice: an autonomous cross-chain yield agent on NEAR Intents. The agent proposes, the policy gate decides, capital flows.",
+  "type": "module",
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "dry": "tsx src/dry-run.ts --fixtures",
+    "dry:live": "tsx src/dry-run.ts --live",
+    "dry:fixtures": "tsx src/dry-run.ts --fixtures",
+    "record-fixtures": "tsx src/dry-run.ts --live --record",
+    "typecheck": "tsc --noEmit"
+  },
+  "devDependencies": {
+    "@types/node": "^20.17.10",
+    "tsx": "^4.19.2",
+    "typescript": "^5.7.2"
+  }
+}

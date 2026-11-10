@@ -1,0 +1,9 @@
+{
+  "correlationId": "fixture-success",
+  "status": "SUCCESS",
+  "updatedAt": "2026-11-10T00:00:00.000Z",
+  "swapDetails": {
+    "amountOutFormatted": "9.99",
+    "nearTxHashes": []
+  }
+}

@@ -1,0 +1,8 @@
+{
+  "correlationId": "fixture-pending",
+  "status": "PENDING_DEPOSIT",
+  "updatedAt": "2026-11-10T00:00:00.000Z",
+  "swapDetails": {
+    "nearTxHashes": []
+  }
+}

@@ -1,0 +1,12 @@
+{
+  "correlationId": "fixture-refunded",
+  "status": "REFUNDED",
+  "updatedAt": "2026-11-10T00:00:00.000Z",
+  "swapDetails": {
+    "refundedAmount": "10000000",
+    "refundedAmountFormatted": "10",
+    "refundedAmountUsd": "10",
+    "refundReason": "PARTIAL_DEPOSIT",
+    "nearTxHashes": []
+  }
+}
