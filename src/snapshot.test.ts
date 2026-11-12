@@ -1,5 +1,8 @@
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
 import { afterEach, describe, it } from "node:test";
+import { resolve } from "node:path";
+import { rootDir } from "./env.js";
 import { loadPolicy } from "./gate.js";
 import {
   STATE_CACHE_MS,
@@ -7,6 +10,8 @@ import {
   buildPublicState,
   clearControlBookCache,
   fixtureFeedLine,
+  loadDeployment,
+  parseDeployment,
 } from "./snapshot.js";
 
 const JUNK = "JUNK_POOL_SHOULD_NOT_LEAK";
@@ -149,5 +154,56 @@ describe("control yield feed", { concurrency: 1 }, () => {
     assert.equal(state.feed, "fixture");
     assert.match(state.feedLine, /Live feed unavailable, showing saved snapshot from 2026-11-10/);
     assert.ok(Date.now() - started < 2_000);
+  });
+
+  it("reads the deployed gate, including the file the state function bundles", async () => {
+    const source = readFileSync(resolve(rootDir, "api", "state.js"), "utf8");
+    assert.match(source, /contracts\/sluice-gate\/deployed\.json/);
+    assert.match(source, /parseDeployment\(deployed\)/);
+    const raw = JSON.parse(readFileSync(resolve(rootDir, "contracts", "sluice-gate", "deployed.json"), "utf8")) as {
+      contractId: string;
+      explorerAccount: string;
+      deployTx: string;
+      attackVetoTx: string;
+    };
+    const parsed = parseDeployment(raw);
+    assert.ok(parsed);
+    assert.equal(parsed.contractId, "sluice-0andadream.testnet");
+    assert.equal(parsed.explorerAccount, "https://testnet.nearblocks.io/address/sluice-0andadream.testnet");
+    assert.equal(parsed.deployTx, raw.deployTx);
+    assert.equal(parsed.attackVetoTx, raw.attackVetoTx);
+    assert.equal(loadDeployment()?.contractId, parsed.contractId);
+    assert.equal(parseDeployment({ contractId: "not a near account", network: "testnet" }), null);
+
+    clearControlBookCache();
+    const state = await buildPublicState(new Date("2026-11-12T18:00:00.000Z"), {
+      fetchImpl: async () => {
+        throw new Error("llama down");
+      },
+      env: {},
+      deployment: parsed,
+      includePreview: true,
+      preview: async (args) => {
+        assert.equal(args.recipient, "");
+        assert.ok(args.amount_usd_cents > 0);
+        return {
+          available: true,
+          approved: false,
+          reasons: ["amount_usd_cents 500000 exceeds max_move_usd_cents 1000"],
+          grossSpreadBps: 498,
+          netSpreadBps: 428,
+          contractId: parsed.contractId,
+          network: "testnet",
+          method: "preview",
+        };
+      },
+    });
+    assert.equal(state.gate?.contractId, "sluice-0andadream.testnet");
+    assert.equal(state.gate?.deployTx, raw.deployTx);
+    assert.equal(state.preview?.available, true);
+    if (state.preview?.available) {
+      assert.equal(state.preview.approved, false);
+      assert.match(state.preview.reasons.join(" "), /500000/);
+    }
   });
 });

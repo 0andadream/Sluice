@@ -67,7 +67,7 @@ const server = createServer(async (req, res) => {
   const url = new URL(req.url ?? "/", "http://127.0.0.1");
   const pathname = url.pathname.length > 1 && url.pathname.endsWith("/") ? url.pathname.slice(0, -1) : url.pathname;
   if (pathname === "/api/state") {
-    sendJson(res, 200, await buildPublicState());
+    sendJson(res, 200, await buildPublicState(new Date(), { includePreview: true, previewTimeoutMs: 2_500 }));
     return;
   }
   if (pathname === "/api/dry-quote") {
