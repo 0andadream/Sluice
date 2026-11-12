@@ -5,7 +5,8 @@
   "cleanUrls": true,
   "functions": {
     "api/state.js": {
-      "includeFiles": "../fixtures/**,../gate.policy.json,../contracts/sluice-gate/deployed.json"
+      "includeFiles": "../fixtures/**,../gate.policy.json,../contracts/sluice-gate/deployed.json",
+      "maxDuration": 10
     },
     "api/dry-quote.js": {
       "includeFiles": "../fixtures/**,../gate.policy.json",

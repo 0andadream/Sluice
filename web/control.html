@@ -57,6 +57,7 @@
       .age { color: var(--muted); text-align: right; }
       .age strong { color: var(--ink); font-weight: 650; }
       .stale { color: var(--veto); }
+      .live { color: var(--open); }
       .hero, .card, .probe, .log {
         background: var(--card);
         border: 1px solid var(--line);
@@ -160,23 +161,13 @@
       function money(amount) {
         return Number(amount).toLocaleString("en-US", { style: "currency", currency: "USD" });
       }
-      function age(seconds) {
-        if (seconds == null) return "unknown age";
-        const days = Math.floor(seconds / 86400);
-        const hours = Math.floor((seconds % 86400) / 3600);
-        if (days > 0) return `${days}d ${hours}h`;
-        const minutes = Math.floor((seconds % 3600) / 60);
-        if (hours > 0) return `${hours}h ${minutes}m`;
-        return `${minutes}m`;
-      }
       function render(state) {
-        const old = (state.ageSeconds ?? 0) > 86400;
+        const live = state.feed === "live";
         const ageNode = $("age");
-        ageNode.replaceChildren(
-          el("span", old ? "stale" : "", `Snapshot ${age(state.ageSeconds)} old`),
-          document.createElement("br"),
-          el("strong", "", state.fetchedAt ?? ""),
-        );
+        ageNode.replaceChildren(el("span", live ? "live" : "stale", state.feedLine || ""));
+        if (live && state.fetchedAt) {
+          ageNode.append(document.createElement("br"), el("strong", "", state.fetchedAt));
+        }
         const decision = state.decision;
         const hero = $("hero");
         hero.className = `hero ${decision.approved ? "open" : "veto"}`;

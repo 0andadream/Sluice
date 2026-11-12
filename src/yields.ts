@@ -107,10 +107,14 @@ export function bookFromPools(
   };
 }
 
-export async function fetchYieldBook(policy: Policy): Promise<YieldBook> {
-  const response = await fetch(YIELDS_URL, {
+export async function fetchYieldBook(
+  policy: Policy,
+  options: { timeoutMs?: number; fetchImpl?: typeof fetch } = {},
+): Promise<YieldBook> {
+  const fetchImpl = options.fetchImpl ?? fetch;
+  const response = await fetchImpl(YIELDS_URL, {
     headers: { accept: "application/json" },
-    signal: AbortSignal.timeout(30_000),
+    signal: AbortSignal.timeout(options.timeoutMs ?? 30_000),
   });
   if (!response.ok) {
     throw new Error(`DefiLlama yields ${response.status} ${response.statusText}`);
