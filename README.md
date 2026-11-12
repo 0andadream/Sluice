@@ -4,6 +4,12 @@
 
 **The agent proposes. The policy gate decides. Capital flows.**
 
+## Demo (73s)
+
+[![Watch the Sluice demo: an AI agent is told to send $5,000 to attacker.near, and the NEAR contract vetoes it](docs/demo-thumb.png)](https://github.com/0andadream/Sluice/blob/main/docs/sluice-demo.mp4)
+
+▶️ [Watch the demo video](https://github.com/0andadream/Sluice/blob/main/docs/sluice-demo.mp4): the agent gets prompt-injected into sending $5,000 to `attacker.near`, and both the off-chain gate and the `sluice-0andadream.testnet` contract veto it. Then a real NEAR Intents dry quote passes the gate.
+
 Live site: [https://sluice-one.vercel.app](https://sluice-one.vercel.app)
 
 - `/` is the landing page.
