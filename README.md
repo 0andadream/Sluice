@@ -230,7 +230,7 @@ The body is capped at 12,000 bytes, the reply at 4,000 characters, and each fiel
 npm run control
 ```
 
-That serves `http://127.0.0.1:4173`. The page shows how old the yield snapshot is, the decision, the vetoes, and the decision history. Explorer links appear when a decision has one. **Run live dry quote** posts to `/api/dry-quote`. The server uses `SLUICE_RECIPIENT` and `SLUICE_REFUND_TO` from its own environment. The browser cannot supply an address. The quote is `dry: true`. If those variables are unset, the button returns an error and no quote is requested.
+That serves `http://127.0.0.1:4173`. `/control` reads live USDC yields from DefiLlama, keeps them for five minutes, and runs the gate on that book. The header says `Live, updated` plus the age. If that fetch fails, the page says the live feed is unavailable and shows the saved snapshot from `fixtures/yields.json`. Explorer links appear when a decision has one. **Run live dry quote** posts to `/api/dry-quote`. The server uses `SLUICE_RECIPIENT` and `SLUICE_REFUND_TO` from its own environment. The browser cannot supply an address. The quote is `dry: true`. If those variables are unset, the button returns an error and no quote is requested.
 
 Redeploy the existing Vercel project from this repo so the page and the API ship together. The previous live site was a static snapshot whose source was not in the repo.
 
@@ -305,7 +305,7 @@ DefiLlama, NEAR Intents, and NEAR AI Cloud are HTTP services.
 - The unauthenticated fee in this policy is 20 bps, from hackathon rule Q-006. The fees page currently also prints 25 bps without a key. See [The gate](#the-gate).
 - The move is a USDC transfer into 1Click, not a deposit into Rhea. The destination is the recipient account. Supplying on Rhea is not in this tree.
 - Reward APY is ignored on purpose. Kamino's USDC markets are not on the venue list.
-- `https://yields.llama.fi/pools` answered on 2026-11-10. If that route is removed, the live read fails and `npm run dry` still uses `fixtures/yields.json`. The control page shows the age of that snapshot.
+- `https://yields.llama.fi/pools` is read live by `/api/state` with a 4 second timeout and a 5 minute cache. If that route fails, the control page says the live feed is unavailable and shows the saved snapshot in `fixtures/yields.json` (recorded 2026-11-10). `npm run dry` still uses that file unless you pass `--live`.
 - The recorded quote uses a placeholder recipient and the refund address from the 1Click OpenAPI example. No deposit was made to either.
 - Status fixtures follow the documented status enum. They are not swaps this project submitted.
 - NEAR AI was not called for the recorded proposal. The published proposal is the rules proposal. The call path degrades to that proposal when the key is absent.

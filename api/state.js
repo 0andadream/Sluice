@@ -10,8 +10,8 @@ import "../fixtures/status-refunded.json" with { type: "json" };
 import "../fixtures/status-failed.json" with { type: "json" };
 import "../fixtures/status-incomplete.json" with { type: "json" };
 
-export default function handler(_req, res) {
-  const body = JSON.stringify(buildPublicState());
+export default async function handler(_req, res) {
+  const body = JSON.stringify(await buildPublicState());
   res.statusCode = 200;
   res.setHeader("content-type", "application/json; charset=utf-8");
   res.setHeader("cache-control", "no-store");

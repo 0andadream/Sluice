@@ -5,8 +5,8 @@ import { rootDir } from "./env.js";
 import { evaluateProposal, evaluateQuote, loadPolicy } from "./gate.js";
 import { findUsdc, interpretStatus, loadQuoteFixture, loadTokenFixture, asExecutionStatus } from "./intents.js";
 import { nearAccountUrl } from "./links.js";
-import type { ChainId, ExecutionStatus } from "./types.js";
-import { loadYieldFixture } from "./yields.js";
+import type { ChainId, ExecutionStatus, YieldBook } from "./types.js";
+import { fetchYieldBook, loadYieldFixture } from "./yields.js";
 
 export type PublicDecision = {
   id: string;
@@ -75,9 +75,90 @@ export function ageSeconds(iso: string, now = Date.now()): number | null {
   return Math.max(0, Math.round((now - then) / 1000));
 }
 
-export function buildPublicState(now = new Date()) {
+/** Live DefiLlama read for the control page. The dry-run keeps the longer timeout. */
+export const STATE_FETCH_TIMEOUT_MS = 4_000;
+export const STATE_CACHE_MS = 5 * 60 * 1000;
+
+type CachedBook = { book: YieldBook; at: number };
+let cachedBook: CachedBook | null = null;
+let inflight: Promise<YieldBook> | null = null;
+let cacheGeneration = 0;
+
+export function clearControlBookCache(): void {
+  cachedBook = null;
+  inflight = null;
+  cacheGeneration += 1;
+}
+
+export function formatAge(seconds: number): string {
+  const whole = Number.isFinite(seconds) ? Math.max(0, Math.round(seconds)) : 0;
+  if (whole < 60) return `${whole}s`;
+  const minutes = Math.floor(whole / 60);
+  const rem = whole % 60;
+  if (minutes < 60) return rem === 0 ? `${minutes}m` : `${minutes}m ${rem}s`;
+  const hours = Math.floor(minutes / 60);
+  const mins = minutes % 60;
+  if (hours < 48) return mins === 0 ? `${hours}h` : `${hours}h ${mins}m`;
+  const days = Math.floor(hours / 24);
+  const rest = hours % 24;
+  return rest === 0 ? `${days}d` : `${days}d ${rest}h`;
+}
+
+export function snapshotDate(iso: string): string {
+  const parsed = Date.parse(iso);
+  if (!Number.isFinite(parsed)) return iso;
+  return new Date(parsed).toISOString().slice(0, 10);
+}
+
+export function liveFeedLine(seconds: number): string {
+  return `Live, updated ${formatAge(seconds)} ago`;
+}
+
+export function fixtureFeedLine(iso: string): string {
+  return `Live feed unavailable, showing saved snapshot from ${snapshotDate(iso)}`;
+}
+
+async function liveBook(
+  policy: ReturnType<typeof loadPolicy>,
+  nowMs: number,
+  fetchImpl: typeof fetch | undefined,
+  timeoutMs: number,
+  cacheMs: number,
+): Promise<YieldBook> {
+  if (cachedBook && nowMs - cachedBook.at < cacheMs) return cachedBook.book;
+  const generation = cacheGeneration;
+  if (!inflight) {
+    const pending = fetchYieldBook(policy, { timeoutMs, fetchImpl }).finally(() => {
+      if (inflight === pending) inflight = null;
+    });
+    inflight = pending;
+  }
+  const book = await inflight;
+  if (book.candidates.length === 0) throw new Error("live yield book has no venues");
+  if (generation === cacheGeneration) cachedBook = { book, at: nowMs };
+  return book;
+}
+
+export async function buildPublicState(
+  now = new Date(),
+  options: { fetchImpl?: typeof fetch; timeoutMs?: number; cacheMs?: number } = {},
+) {
   const policy = loadPolicy();
-  const book = loadYieldFixture(policy);
+  let book: YieldBook;
+  let live = true;
+  try {
+    book = await liveBook(
+      policy,
+      now.getTime(),
+      options.fetchImpl,
+      options.timeoutMs ?? STATE_FETCH_TIMEOUT_MS,
+      options.cacheMs ?? STATE_CACHE_MS,
+    );
+  } catch {
+    book = loadYieldFixture(policy);
+    live = false;
+  }
+  const age = ageSeconds(book.fetchedAt, now.getTime());
   const proposal = rulesProposal(book, policy);
   const decision = evaluateProposal(proposal, book, policy, now, null, false, null);
   const probes = [
@@ -152,8 +233,10 @@ export function buildPublicState(now = new Date()) {
   });
   const deployment = loadDeployment();
   return {
+    feed: live ? ("live" as const) : ("fixture" as const),
+    feedLine: live ? liveFeedLine(age ?? 0) : fixtureFeedLine(book.fetchedAt),
     fetchedAt: book.fetchedAt,
-    ageSeconds: ageSeconds(book.fetchedAt, now.getTime()),
+    ageSeconds: age,
     generatedAt: now.toISOString(),
     book,
     proposal,
