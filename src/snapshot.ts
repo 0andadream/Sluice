@@ -5,7 +5,9 @@ import { rootDir } from "./env.js";
 import { evaluateProposal, evaluateQuote, loadPolicy } from "./gate.js";
 import { findUsdc, interpretStatus, loadQuoteFixture, loadTokenFixture, asExecutionStatus } from "./intents.js";
 import { nearAccountUrl } from "./links.js";
-import type { ChainId, ExecutionStatus, YieldBook } from "./types.js";
+import { previewOnTestnet, type PreviewArgs, type PreviewOutcome } from "./near-preview.js";
+import { apyToPpm } from "./policy-math.js";
+import type { ChainId, ExecutionStatus, Proposal, YieldBook } from "./types.js";
 import { fetchYieldBook, loadYieldFixture } from "./yields.js";
 
 export type PublicDecision = {
@@ -21,10 +23,43 @@ export type Deployment = {
   network: "testnet" | "mainnet";
   contractId: string;
   explorerAccount: string;
+  deployTx: string | null;
+  attackVetoTx: string | null;
 };
+
+const TESTNET_ACCOUNT = /^[a-z0-9][a-z0-9._-]{0,62}\.testnet$/;
 
 function readJson(path: string): unknown {
   return JSON.parse(readFileSync(path, "utf8"));
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function httpsUrl(value: unknown): string | null {
+  if (typeof value !== "string") return null;
+  try {
+    const url = new URL(value);
+    if (url.protocol !== "https:") return null;
+    return url.toString();
+  } catch {
+    return null;
+  }
+}
+
+/** The shape of contracts/sluice-gate/deployed.json. Returns null when the id is missing. */
+export function parseDeployment(body: unknown): Deployment | null {
+  if (!isRecord(body) || typeof body.contractId !== "string") return null;
+  const network = body.network === "mainnet" ? "mainnet" : "testnet";
+  if (network === "testnet" && !TESTNET_ACCOUNT.test(body.contractId)) return null;
+  return {
+    network,
+    contractId: body.contractId,
+    explorerAccount: httpsUrl(body.explorerAccount) ?? nearAccountUrl(body.contractId, network),
+    deployTx: httpsUrl(body.deployTx),
+    attackVetoTx: httpsUrl(body.attackVetoTx),
+  };
 }
 
 export function loadDecisions(): PublicDecision[] {
@@ -52,16 +87,27 @@ export function loadDecisions(): PublicDecision[] {
 export function loadDeployment(): Deployment | null {
   const path = resolve(rootDir, "contracts", "sluice-gate", "deployed.json");
   if (!existsSync(path)) return null;
-  const body = readJson(path);
-  if (typeof body !== "object" || body === null) return null;
-  const item = body as Record<string, unknown>;
-  if (typeof item.contractId !== "string") return null;
-  const network = item.network === "mainnet" ? "mainnet" : "testnet";
+  return parseDeployment(readJson(path));
+}
+
+function ppmFor(book: YieldBook, chain: string, project: string): number {
+  const venue = book.candidates.find((row) => row.chain === chain && row.project === project);
+  if (!venue) return 0;
+  const ppm = apyToPpm(venue.decisionApy);
+  return Number.isSafeInteger(ppm) ? ppm : 0;
+}
+
+function proposalPreviewArgs(proposal: Proposal, book: YieldBook): PreviewArgs {
   return {
-    network,
-    contractId: item.contractId,
-    explorerAccount:
-      typeof item.explorerAccount === "string" ? item.explorerAccount : nearAccountUrl(item.contractId, network),
+    from_chain: proposal.fromChain,
+    to_chain: proposal.toChain,
+    asset: proposal.asset,
+    amount_usd_cents: Math.round(proposal.amountUsd * 100),
+    from_project: proposal.fromProject,
+    to_project: proposal.toProject,
+    recipient: "",
+    source_apy_ppm: ppmFor(book, proposal.fromChain, proposal.fromProject),
+    dest_apy_ppm: ppmFor(book, proposal.toChain, proposal.toProject),
   };
 }
 
@@ -148,6 +194,11 @@ export async function buildPublicState(
     brainFetch?: typeof fetch;
     env?: NodeJS.ProcessEnv;
     brainTimeoutMs?: number;
+    /** Pass the imported deployed.json. Undefined reads the file. Null means it was not in the bundle. */
+    deployment?: Deployment | null;
+    includePreview?: boolean;
+    preview?: (args: PreviewArgs) => Promise<PreviewOutcome>;
+    previewTimeoutMs?: number;
   } = {},
 ) {
   const policy = loadPolicy();
@@ -243,7 +294,12 @@ export async function buildPublicState(
     const read = interpretStatus(statusFixture(file ?? ""));
     return { file, outcome, summary: read.summary, status: read.status };
   });
-  const deployment = loadDeployment();
+  const deployment = options.deployment !== undefined ? options.deployment : loadDeployment();
+  const preview = options.includePreview
+    ? await (options.preview ?? ((args: PreviewArgs) => previewOnTestnet(args, fetch, options.previewTimeoutMs ?? 2_500)))(
+        proposalPreviewArgs(proposal, book),
+      )
+    : null;
   return {
     feed: live ? ("live" as const) : ("fixture" as const),
     feedLine: live ? liveFeedLine(age ?? 0) : fixtureFeedLine(book.fetchedAt),
@@ -268,6 +324,7 @@ export async function buildPublicState(
     feeBps: decision.feeBps,
     decisions: loadDecisions(),
     gate: deployment,
+    preview,
     liveQuote: false,
   };
 }

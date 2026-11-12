@@ -94,6 +94,9 @@
       button:disabled { opacity: 0.6; cursor: wait; }
       #quote-result { margin-top: 12px; color: var(--muted); white-space: pre-wrap; }
       a { color: var(--water); }
+      #gate { display: grid; gap: 10px; }
+      #gate a { overflow-wrap: anywhere; }
+      #gate .id { font-size: 18px; }
       .nav { display: flex; flex-wrap: wrap; gap: 8px 16px; align-items: center; margin-bottom: 18px; color: var(--muted); }
       .nav a { color: var(--muted); text-decoration: none; }
       .nav a:hover, .nav a[aria-current="page"] { color: var(--ink); }
@@ -260,11 +263,34 @@
           logs.append(card);
         }
         const gate = $("gate");
+        function gateLink(href, label) {
+          if (typeof href !== "string" || !href.startsWith("https://")) return null;
+          const link = el("a", "", label);
+          link.href = href;
+          link.rel = "noopener noreferrer";
+          link.target = "_blank";
+          return link;
+        }
         if (state.gate?.contractId) {
-          gate.replaceChildren(el("div", "", state.gate.contractId));
-          const link = el("a", "", "Contract on the explorer");
-          link.href = state.gate.explorerAccount;
-          gate.append(link);
+          const account = gateLink(state.gate.explorerAccount, state.gate.contractId);
+          const id = el("div", "id");
+          if (account) id.append(account);
+          else id.textContent = state.gate.contractId;
+          const links = el("div", "");
+          const deploy = gateLink(state.gate.deployTx, "Deploy transaction");
+          const veto = gateLink(state.gate.attackVetoTx, "Attack veto");
+          if (deploy) links.append(deploy, document.createTextNode(" · "));
+          if (veto) links.append(veto);
+          const preview = state.preview;
+          const verdict = el("div", "");
+          if (preview && preview.available) {
+            verdict.append(el("span", preview.approved ? "yes" : "no", preview.approved ? "Preview: Approve" : "Preview: Veto"));
+            const reasons = (preview.reasons || []).filter((reason) => typeof reason === "string" && reason.length > 0);
+            if (reasons.length) verdict.append(document.createTextNode(" · " + reasons.join(" ")));
+          } else if (preview) {
+            verdict.append(el("span", "", "Preview was unavailable."));
+          }
+          gate.replaceChildren(id, links, verdict);
         } else {
           text(gate, "No deployed contract id is recorded in this build. The contract tests run locally.");
         }

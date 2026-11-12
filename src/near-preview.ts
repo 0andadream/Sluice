@@ -133,7 +133,11 @@ function rpcBody(contractId: string, args: PreviewArgs): string {
  * Calls `preview` through a testnet query. The URL, method, and account are fixed here.
  * Callers cannot choose a host, a contract, or a method.
  */
-export async function previewOnTestnet(args: PreviewArgs, fetchImpl: typeof fetch = fetch): Promise<PreviewOutcome> {
+export async function previewOnTestnet(
+  args: PreviewArgs,
+  fetchImpl: typeof fetch = fetch,
+  timeoutMs = 6_000,
+): Promise<PreviewOutcome> {
   const contractId = testnetContractId();
   if (!contractId) return miss(null);
   const body = rpcBody(contractId, args);
@@ -146,7 +150,7 @@ export async function previewOnTestnet(args: PreviewArgs, fetchImpl: typeof fetc
         redirect: "error",
         headers: { "content-type": "application/json", accept: "application/json" },
         body,
-        signal: AbortSignal.timeout(6_000),
+        signal: AbortSignal.timeout(timeoutMs),
       });
       if (!response.ok) continue;
       const decision = readDecision(await response.json());
