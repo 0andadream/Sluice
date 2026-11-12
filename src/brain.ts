@@ -1,8 +1,10 @@
-import { envPresent } from "./env.js";
 import { CHAINS, type BrainResult, type ChainId, type Policy, type Proposal, type Venue, type YieldBook } from "./types.js";
 
+export const NEAR_AI_DEFAULT_BASE = "https://cloud-api.near.ai/v1";
+export const NEAR_AI_DEFAULT_MODEL = "z-ai/glm-5.3-flash";
+
 const UNVERIFIED =
-  "No TEE attestation or response signature was verified. A signature would not approve a move. See https://docs.near.ai/cloud/verification .";
+  "The Intel quote and the response signature were not verified. Full verification is documented at https://docs.near.ai/cloud/verification and can be inspected at https://cloud.near.ai/verify . A verified signature would not approve a move.";
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null;
@@ -93,10 +95,35 @@ type ModelCall = {
   detail: string;
 };
 
-async function nearAiProposal(book: YieldBook, policy: Policy): Promise<ModelCall> {
-  const base = process.env.NEAR_AI_BASE_URL?.trim() || "https://cloud-api.near.ai/v1";
-  const model = process.env.NEAR_AI_MODEL?.trim() || "z-ai/glm-5.2";
-  const key = process.env.NEAR_AI_API_KEY?.trim();
+export type ProposeOptions = {
+  fetchImpl?: typeof fetch;
+  env?: NodeJS.ProcessEnv;
+  timeoutMs?: number;
+};
+
+function aiEnv(options: ProposeOptions): NodeJS.ProcessEnv {
+  return options.env ?? process.env;
+}
+
+function hideKey(message: string, key: string): string {
+  return key ? message.split(key).join("[redacted]") : message;
+}
+
+async function readText(response: Response): Promise<string> {
+  return response.text();
+}
+
+async function nearAiProposal(
+  book: YieldBook,
+  policy: Policy,
+  options: ProposeOptions,
+): Promise<ModelCall & { model: string }> {
+  const env = aiEnv(options);
+  const fetchImpl = options.fetchImpl ?? fetch;
+  const timeoutMs = options.timeoutMs ?? 25_000;
+  const base = (env.NEAR_AI_BASE_URL?.trim() || NEAR_AI_DEFAULT_BASE).replace(/\/$/, "");
+  const model = env.NEAR_AI_MODEL?.trim() || NEAR_AI_DEFAULT_MODEL;
+  const key = env.NEAR_AI_API_KEY?.trim() ?? "";
   if (!key) throw new Error("NEAR_AI_API_KEY is empty");
   const snapshot = {
     capitalChain: policy.capitalChain,
@@ -112,7 +139,7 @@ async function nearAiProposal(book: YieldBook, policy: Policy): Promise<ModelCal
       tvlUsd: Math.round(venue.tvlUsd),
     })),
   };
-  const response = await fetch(`${base.replace(/\/$/, "")}/chat/completions`, {
+  const response = await fetchImpl(`${base}/chat/completions`, {
     method: "POST",
     headers: {
       authorization: `Bearer ${key}`,
@@ -131,10 +158,10 @@ async function nearAiProposal(book: YieldBook, policy: Policy): Promise<ModelCal
       ],
       response_format: { type: "json_object" },
     }),
-    signal: AbortSignal.timeout(25_000),
+    signal: AbortSignal.timeout(timeoutMs),
   });
-  const text = await response.text();
-  if (!response.ok) throw new Error(`NEAR AI ${response.status} ${text.slice(0, 240)}`);
+  const text = await readText(response);
+  if (!response.ok) throw new Error(`NEAR AI ${response.status} ${hideKey(text.slice(0, 240), key)}`);
   const body: unknown = JSON.parse(text);
   if (!isRecord(body) || !Array.isArray(body.choices) || !isRecord(body.choices[0])) {
     throw new Error("NEAR AI response has no choices");
@@ -153,64 +180,108 @@ async function nearAiProposal(book: YieldBook, policy: Policy): Promise<ModelCal
   if ("error" in parsed) throw new Error(parsed.error);
   const named = claimedRecipient(modelJson);
   const responseId = typeof body.id === "string" ? body.id : null;
-  let signatureStatus: string | null = null;
+  const evidence = await attestationEvidence(base, model, responseId, key, fetchImpl);
+  return { proposal: parsed, claimedRecipient: named, detail: evidence, model };
+}
+
+async function attestationEvidence(
+  base: string,
+  model: string,
+  responseId: string | null,
+  key: string,
+  fetchImpl: typeof fetch,
+): Promise<string> {
+  const reportUrl = `${base}/attestation/report?model=${encodeURIComponent(model)}&signing_algo=ecdsa`;
+  let reportNote = "GET /v1/attestation/report was not read.";
+  try {
+    const report = await fetchImpl(reportUrl, {
+      headers: { accept: "application/json" },
+      signal: AbortSignal.timeout(10_000),
+    });
+    const reportText = await readText(report);
+    if (!report.ok) {
+      reportNote = `GET /v1/attestation/report returned ${report.status}.`;
+    } else {
+      let quote = false;
+      try {
+        const parsed: unknown = JSON.parse(reportText);
+        const gateway = isRecord(parsed) ? parsed.gateway_attestation : null;
+        quote = isRecord(gateway) && typeof gateway.intel_quote === "string" && gateway.intel_quote.length > 0;
+      } catch {
+        quote = false;
+      }
+      reportNote = quote
+        ? "GET /v1/attestation/report returned a gateway Intel quote. This process does not check the quote, the event log, or a model TEE."
+        : "GET /v1/attestation/report returned 200 without a gateway Intel quote.";
+    }
+  } catch {
+    reportNote = "GET /v1/attestation/report failed.";
+  }
+
+  let signatureNote = "No response id, so /v1/signature was not called.";
   if (responseId) {
-    const signatureUrl = `${base.replace(/\/$/, "")}/signature/${encodeURIComponent(responseId)}?signing_algo=ecdsa`;
+    const signatureUrl = `${base}/signature/${encodeURIComponent(responseId)}?signing_algo=ecdsa`;
     try {
-      const signature = await fetch(signatureUrl, {
+      const signature = await fetchImpl(signatureUrl, {
         headers: { authorization: `Bearer ${key}`, accept: "application/json" },
         signal: AbortSignal.timeout(10_000),
       });
-      signatureStatus = String(signature.status);
+      signatureNote = `GET /v1/signature returned ${signature.status}. That body was not checked against the quote.`;
     } catch {
-      signatureStatus = "fetch failed";
+      signatureNote = "GET /v1/signature failed.";
     }
   }
-  const detail = [
-    `NEAR AI response ${responseId ?? "had no id"}.`,
-    signatureStatus ? `GET /v1/signature returned ${signatureStatus}.` : "No response id, so /v1/signature was not called.",
-    "That status was not checked against a gateway attestation or a model attestation.",
-    UNVERIFIED,
-  ].join(" ");
-  return { proposal: parsed, claimedRecipient: named, detail };
+  return [`NEAR AI response ${responseId ?? "had no id"}.`, reportNote, signatureNote, UNVERIFIED].join(" ");
 }
 
-export async function propose(book: YieldBook, policy: Policy, allowModel: boolean): Promise<BrainResult> {
-  const rules = rulesProposal(book, policy);
-  const rulesAttestation = {
-    verified: false as const,
-    detail: envPresent("NEAR_AI_API_KEY")
-      ? `Model call skipped. ${UNVERIFIED}`
-      : `NEAR_AI_API_KEY is not set, so NEAR AI was not called. ${UNVERIFIED}`,
+function fallbackResult(proposal: Proposal, note: string, detail: string): BrainResult {
+  return {
+    source: "fallback",
+    model: null,
+    proposer: "fallback",
+    proposal,
+    claimedRecipient: null,
+    note,
+    attestation: { verified: false, detail },
   };
-  if (!allowModel || !envPresent("NEAR_AI_API_KEY")) {
-    return {
-      source: "rules",
-      proposal: rules,
-      claimedRecipient: null,
-      note: envPresent("NEAR_AI_API_KEY")
-        ? "Rules proposal. Model call skipped."
-        : "Rules proposal. NEAR_AI_API_KEY is not set.",
-      attestation: rulesAttestation,
-    };
+}
+
+export async function propose(
+  book: YieldBook,
+  policy: Policy,
+  allowModel: boolean,
+  options: ProposeOptions = {},
+): Promise<BrainResult> {
+  const rules = rulesProposal(book, policy);
+  const env = aiEnv(options);
+  const key = env.NEAR_AI_API_KEY?.trim() ?? "";
+  if (!allowModel || !key) {
+    const skipped = Boolean(key);
+    return fallbackResult(
+      rules,
+      skipped ? "Deterministic proposer. Model call skipped." : "Deterministic proposer. NEAR_AI_API_KEY is not set.",
+      skipped
+        ? `Model call skipped. ${UNVERIFIED}`
+        : `NEAR_AI_API_KEY is not set, so NEAR AI was not called. ${UNVERIFIED}`,
+    );
   }
   try {
-    const model = await nearAiProposal(book, policy);
+    const model = await nearAiProposal(book, policy, options);
     return {
       source: "near-ai",
+      model: model.model,
+      proposer: `NEAR AI ${model.model}`,
       proposal: model.proposal,
       claimedRecipient: model.claimedRecipient,
       note: "NEAR AI Cloud returned a proposal. The gate still decides.",
       attestation: { verified: false, detail: model.detail },
     };
   } catch (error) {
-    const message = error instanceof Error ? error.message : "unknown error";
-    return {
-      source: "rules",
-      proposal: rules,
-      claimedRecipient: null,
-      note: `NEAR AI call failed (${message}). Fell back to rules.`,
-      attestation: { verified: false, detail: `NEAR AI call failed. ${UNVERIFIED}` },
-    };
+    const message = hideKey(error instanceof Error ? error.message : "unknown error", key);
+    return fallbackResult(
+      rules,
+      `NEAR AI call failed (${message}). Fell back to the deterministic proposer.`,
+      `NEAR AI call failed. ${UNVERIFIED}`,
+    );
   }
 }

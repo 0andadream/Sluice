@@ -188,6 +188,7 @@ async function main(): Promise<void> {
 
   const brain = await propose(book, policy, live && !fixturesOnly);
   line(`Brain: ${brain.source}`);
+  line(`Proposer: ${brain.proposer}`);
   line(`  ${brain.note}`);
   if (brain.claimedRecipient) line(`  Model named recipient ${brain.claimedRecipient}. The gate treats that as a claim.`);
   line(`  ${brain.attestation.detail}`);

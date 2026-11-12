@@ -3,6 +3,7 @@ import { afterEach, describe, it } from "node:test";
 import { INJECTED } from "./attack-demo.js";
 import { assessAttack } from "./attack-demo.js";
 import { loadPolicy } from "./gate.js";
+import { testnetContractId } from "./near-preview.js";
 import { handleTrick, listPresets, resetTrickLimits, runTrick, TEXT_MAX, type TrickSuccess } from "./trick.js";
 
 const now = new Date("2026-11-12T17:00:00.000Z");
@@ -58,7 +59,7 @@ function proposalArgs(call: Call): { proposal: Record<string, unknown> } {
   assert.equal(body.method, "query");
   assert.equal(body.params?.request_type, "call_function");
   assert.equal(body.params?.method_name, "preview");
-  assert.equal(body.params?.account_id, "sluice-gate-df46.testnet");
+  assert.equal(body.params?.account_id, testnetContractId());
   assert.equal(typeof body.params?.args_base64, "string");
   return JSON.parse(Buffer.from(body.params?.args_base64 ?? "", "base64").toString("utf8")) as {
     proposal: Record<string, unknown>;
@@ -374,7 +375,7 @@ describe("trick HTTP limits", () => {
     const body = response.body as { ok: boolean; contractId: string; network: string; presets: { id: string }[]; maxMoveUsd: number };
     assert.equal(body.ok, true);
     assert.equal(body.network, "testnet");
-    assert.equal(body.contractId, "sluice-gate-df46.testnet");
+    assert.equal(body.contractId, "sluice-0andadream.testnet");
     assert.equal(body.maxMoveUsd, 10);
     assert.deepEqual(
       body.presets.map((preset) => preset.id),

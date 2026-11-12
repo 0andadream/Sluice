@@ -18,11 +18,15 @@ fi
 cargo build --target wasm32-unknown-unknown --release
 WASM="target/wasm32-unknown-unknown/release/sluice_gate.wasm"
 ARGS="$(cd ../.. && npx tsx scripts/print-gate-init.ts "$ACCOUNT")"
-# sign-with-keychain is the normal path. On a headless machine with no OS keyring,
-# account creation falls back to the legacy keychain: use sign-with-legacy-keychain instead.
+# sign-with-keychain is the normal path. A headless machine with no OS keyring
+# should create the account with save-to-legacy-keychain and set SLUICE_NEAR_KEYCHAIN=legacy.
+SIGN=sign-with-keychain
+if [[ "${SLUICE_NEAR_KEYCHAIN:-}" == "legacy" ]]; then
+  SIGN=sign-with-legacy-keychain
+fi
 near contract deploy "$ACCOUNT" use-file "$WASM" \
-  with-init-call new json-args "$ARGS" prepaid-gas '80 Tgas' attached-deposit '1 NEAR' \
-  network-config testnet sign-with-keychain send
+  with-init-call new json-args "$ARGS" prepaid-gas '100 Tgas' attached-deposit '1 NEAR' \
+  network-config testnet "$SIGN" send
 cat > deployed.json <<EOF
 {
   "network": "testnet",

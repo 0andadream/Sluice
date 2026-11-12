@@ -111,12 +111,15 @@ describe("control yield feed", { concurrency: 1 }, () => {
     const fetchImpl: typeof fetch = async () => {
       throw new Error("llama down");
     };
-    const state = await buildPublicState(new Date("2026-11-12T18:00:00.000Z"), { fetchImpl });
+    const state = await buildPublicState(new Date("2026-11-12T18:00:00.000Z"), { fetchImpl, env: {} });
     assert.equal(state.feed, "fixture");
     assert.equal(state.book.source, "fixture");
     assert.equal(state.feedLine, fixtureFeedLine(state.fetchedAt));
     assert.equal(state.feedLine, "Live feed unavailable, showing saved snapshot from 2026-11-10");
     assert.equal(state.decision.grossSpreadBps, 498);
+    assert.equal(state.proposer, "fallback");
+    assert.equal(state.brainSource, "fallback");
+    assert.equal(state.model, null);
   });
 
   it("stops waiting when the live read exceeds the timeout", async () => {

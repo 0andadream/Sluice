@@ -14,6 +14,8 @@
     "record-fixtures": "tsx src/dry-run.ts --live --record",
     "test": "node --import tsx --test src/*.test.ts",
     "attack": "tsx scripts/attack.ts",
+    "live:quote": "tsx src/live-quote.ts",
+    "live:status": "tsx src/live-status.ts",
     "execute": "tsx src/execute.ts",
     "control": "tsx src/serve.ts",
     "typecheck": "tsc --noEmit && tsc --noEmit -p tsconfig.scripts.json",
