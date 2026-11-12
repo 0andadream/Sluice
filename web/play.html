@@ -61,13 +61,48 @@
             <textarea id="text" name="text" maxlength="4000" spellcheck="false" placeholder="Paste the model reply, including any force or skipGate flags."></textarea>
           </label>
           <div class="fields">
-            <label>Amount, USD <input id="amountUsd" name="amountUsd" type="text" inputmode="decimal" autocomplete="off" /></label>
-            <label>Asset <input id="asset" name="asset" type="text" autocomplete="off" /></label>
-            <label>From chain <input id="fromChain" name="fromChain" type="text" autocomplete="off" /></label>
-            <label>To chain <input id="toChain" name="toChain" type="text" autocomplete="off" /></label>
-            <label>From venue <input id="fromProject" name="fromProject" type="text" autocomplete="off" /></label>
-            <label>To venue <input id="toProject" name="toProject" type="text" autocomplete="off" /></label>
-            <label class="wide">Recipient <input id="recipient" name="recipient" type="text" autocomplete="off" placeholder="Leave empty. The model is not allowed to name one." /></label>
+            <label>
+              Amount, USD
+              <input id="amountUsd" name="amountUsd" type="number" inputmode="decimal" step="any" autocomplete="off" />
+              <span class="chips" id="amountChips" role="group" aria-label="Quick amounts">
+                <button class="chip" type="button" data-amount="10">$10</button>
+                <button class="chip" type="button" data-amount="500">$500</button>
+                <button class="chip" type="button" data-amount="5000">$5,000</button>
+              </span>
+            </label>
+            <label>
+              Asset
+              <select id="asset" name="asset"><option value="__other__">Other…</option></select>
+              <input id="assetOther" class="other" type="text" hidden autocomplete="off" spellcheck="false" maxlength="160" aria-label="Custom asset" placeholder="Custom asset" />
+            </label>
+            <label>
+              From chain
+              <select id="fromChain" name="fromChain"><option value="__other__">Other…</option></select>
+              <input id="fromChainOther" class="other" type="text" hidden autocomplete="off" spellcheck="false" maxlength="160" aria-label="Custom from chain" placeholder="Custom chain" />
+            </label>
+            <label>
+              To chain
+              <select id="toChain" name="toChain"><option value="__other__">Other…</option></select>
+              <input id="toChainOther" class="other" type="text" hidden autocomplete="off" spellcheck="false" maxlength="160" aria-label="Custom to chain" placeholder="Custom chain" />
+            </label>
+            <label>
+              From venue
+              <select id="fromProject" name="fromProject"><option value="__other__">Other…</option></select>
+              <input id="fromProjectOther" class="other" type="text" hidden autocomplete="off" spellcheck="false" maxlength="160" aria-label="Custom from venue" placeholder="Custom venue" />
+            </label>
+            <label>
+              To venue
+              <select id="toProject" name="toProject"><option value="__other__">Other…</option></select>
+              <input id="toProjectOther" class="other" type="text" hidden autocomplete="off" spellcheck="false" maxlength="160" aria-label="Custom to venue" placeholder="Custom venue" />
+            </label>
+            <label class="wide">
+              Recipient
+              <select id="recipient" name="recipient">
+                <option value="">Leave empty</option>
+                <option value="__other__">Other…</option>
+              </select>
+              <input id="recipientOther" class="other" type="text" hidden autocomplete="off" spellcheck="false" maxlength="160" aria-label="Custom recipient" placeholder="Custom recipient" />
+            </label>
             <label class="wide">Rationale <input id="rationale" name="rationale" type="text" autocomplete="off" /></label>
           </div>
           <label class="check">
@@ -99,7 +134,15 @@
     </div>
     <noscript><p class="wrap">This playground needs JavaScript to call the gate. Nothing here can spend funds.</p></noscript>
     <script>
-      const KEYS = ["amountUsd", "asset", "fromChain", "toChain", "fromProject", "toProject", "recipient", "rationale"];
+      const OTHER = "__other__";
+      const CHOICES = [
+        ["asset", "assets"],
+        ["fromChain", "chains"],
+        ["toChain", "chains"],
+        ["fromProject", "projects"],
+        ["toProject", "projects"],
+        ["recipient", "recipients"],
+      ];
       const $ = (id) => document.getElementById(id);
       const text = $("text");
       const blurb = $("blurb");
@@ -135,12 +178,105 @@
         return body.proposal && typeof body.proposal === "object" ? body.proposal : body;
       }
 
-      function fillMove(move) {
-        for (const key of KEYS) {
-          const input = $(key);
-          const value = move && move[key] != null ? move[key] : "";
-          input.value = value === "" ? "" : String(value);
+      function strings(value) {
+        return Array.isArray(value) ? value.filter((item) => typeof item === "string") : [];
+      }
+
+      function option(value, label) {
+        const node = document.createElement("option");
+        node.value = value;
+        node.textContent = label == null ? value : label;
+        return node;
+      }
+
+      function renderChoices(allowed, disallowed) {
+        for (const [key, listKey] of CHOICES) {
+          const select = $(key);
+          const current = choiceValue(key);
+          select.replaceChildren();
+          if (key === "recipient") select.append(option("", "Leave empty"));
+          const permitted = strings(allowed && allowed[listKey]);
+          const blocked = strings(disallowed && disallowed[listKey]);
+          if (permitted.length) {
+            const group = document.createElement("optgroup");
+            group.label = "Allowed";
+            for (const value of permitted) group.append(option(value));
+            select.append(group);
+          }
+          if (blocked.length) {
+            const group = document.createElement("optgroup");
+            group.label = "Not allowed (try it)";
+            for (const value of blocked) group.append(option(value));
+            select.append(group);
+          }
+          select.append(option(OTHER, "Other…"));
+          setChoice(key, current);
         }
+      }
+
+      function knownOption(select, value) {
+        const target = String(value);
+        const options = [...select.options].filter((item) => item.value !== OTHER);
+        const exact = options.find((item) => item.value === target);
+        if (exact) return exact.value;
+        const folded = options.find((item) => item.value.toLowerCase() === target.toLowerCase());
+        return folded ? folded.value : null;
+      }
+
+      function setChoice(key, value) {
+        const select = $(key);
+        const other = $(key + "Other");
+        const text = value == null ? "" : String(value);
+        const match = knownOption(select, text);
+        if (match !== null) {
+          select.value = match;
+          other.hidden = true;
+          other.value = "";
+          return;
+        }
+        if (text === "") {
+          select.value = key === "recipient" ? "" : OTHER;
+          other.hidden = select.value !== OTHER;
+          other.value = "";
+          return;
+        }
+        select.value = OTHER;
+        other.hidden = false;
+        other.value = text;
+      }
+
+      function choiceValue(key) {
+        const select = $(key);
+        if (!select) return "";
+        if (select.value === OTHER) return ($(key + "Other").value || "").trim();
+        return select.value.trim();
+      }
+
+      function syncChips() {
+        const amount = Number($("amountUsd").value);
+        for (const chip of $("amountChips").querySelectorAll("button")) {
+          chip.setAttribute("aria-pressed", Number(chip.dataset.amount) === amount ? "true" : "false");
+        }
+      }
+
+      function setAmount(value) {
+        const input = $("amountUsd");
+        if (value == null || value === "") {
+          input.value = "";
+        } else {
+          const cleaned = String(value).replace(/[$,\s]/g, "");
+          const numeric = Number(cleaned);
+          input.value = cleaned !== "" && Number.isFinite(numeric) ? String(numeric) : "";
+        }
+        syncChips();
+      }
+
+      function fillMove(move) {
+        setAmount(move && move.amountUsd != null ? move.amountUsd : "");
+        for (const [key] of CHOICES) setChoice(key, move && move[key] != null ? move[key] : "");
+        const rationale = $("rationale");
+        const reason = move && move.rationale != null ? move.rationale : "";
+        rationale.value = reason === "" ? "" : String(reason);
       }
 
       function selectPreset(preset) {
@@ -167,14 +303,37 @@
         if (list[0]) selectPreset(list[0]);
       }
 
+      for (const [key] of CHOICES) {
+        $(key).addEventListener("change", () => {
+          const other = $(key + "Other");
+          const custom = $(key).value === OTHER;
+          other.hidden = !custom;
+          if (!custom) other.value = "";
+          else other.focus();
+        });
+      }
+
+      $("amountUsd").addEventListener("input", syncChips);
+      $("amountChips").addEventListener("click", (event) => {
+        const chip = event.target.closest("button");
+        if (!chip || !$("amountChips").contains(chip)) return;
+        setAmount(chip.dataset.amount);
+        $("amountUsd").focus();
+      });
+
       text.addEventListener("input", () => {
         const body = extract(text.value);
         if (!body) return;
-        for (const key of KEYS) {
+        if (body.amountUsd != null && typeof body.amountUsd !== "object" && document.activeElement !== $("amountUsd")) {
+          setAmount(body.amountUsd);
+        }
+        for (const [key] of CHOICES) {
           if (body[key] == null || typeof body[key] === "object") continue;
-          const input = $(key);
-          if (document.activeElement === input) continue;
-          input.value = String(body[key]);
+          if (document.activeElement === $(key) || document.activeElement === $(key + "Other")) continue;
+          setChoice(key, body[key]);
+        }
+        if (typeof body.rationale === "string" && document.activeElement !== $("rationale")) {
+          $("rationale").value = body.rationale;
         }
       });
 
@@ -272,17 +431,12 @@
       $("form").addEventListener("submit", async (event) => {
         event.preventDefault();
         const move = {};
-        for (const key of KEYS) {
-          const value = $(key).value.trim();
-          if (key === "amountUsd") {
-            const cleaned = value.replace(/[$,\s]/g, "");
-            if (cleaned === "") move.amountUsd = "";
-            else if (Number.isFinite(Number(cleaned))) move.amountUsd = Number(cleaned);
-            else move.amountUsd = value;
-          } else {
-            move[key] = value;
-          }
-        }
+        const amount = $("amountUsd").value.trim().replace(/[$,\s]/g, "");
+        if (amount === "") move.amountUsd = "";
+        else if (Number.isFinite(Number(amount))) move.amountUsd = Number(amount);
+        else move.amountUsd = amount;
+        for (const [key] of CHOICES) move[key] = choiceValue(key);
+        move.rationale = $("rationale").value.trim();
         runButton.disabled = true;
         showError("Asking the gate and the testnet contract.");
         try {
@@ -308,6 +462,7 @@
         })
         .then((body) => {
           if (!body || !Array.isArray(body.presets)) throw new Error("catalog");
+          renderChoices(body.allowed, body.disallowed);
           renderPresets(body.presets);
         })
         .catch(() => {

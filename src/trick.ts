@@ -2,7 +2,7 @@ import { claimedRecipient, parseProposal } from "./brain.js";
 import { evaluateProposal, loadPolicy } from "./gate.js";
 import { previewOnTestnet, testnetContractId, type PreviewArgs, type PreviewOutcome } from "./near-preview.js";
 import { apyToPpm } from "./policy-math.js";
-import { CHAINS, type ChainId, type Proposal, type YieldBook } from "./types.js";
+import { CHAINS, type ChainId, type Policy, type Proposal, type YieldBook } from "./types.js";
 import { loadYieldFixture } from "./yields.js";
 
 export const TEXT_MAX = 4_000;
@@ -207,21 +207,75 @@ export function listPresets(): TrickPreset[] {
   }));
 }
 
+export type TrickChoiceLists = {
+  chains: string[];
+  assets: string[];
+  projects: string[];
+  recipients: string[];
+};
+
+/** Realistic values a visitor can try that the policy does not allow. Solana is allowed, so it is not listed here. */
+const SAMPLE_DISALLOWED: TrickChoiceLists = {
+  chains: ["ethereum", "arbitrum", "polygon"],
+  assets: ["ETH", "USDT"],
+  projects: ["uniswap", "morpho"],
+  recipients: ["attacker.near"],
+};
+
+function uniqueProjects(policy: Policy): string[] {
+  const projects: string[] = [];
+  const seen = new Set<string>();
+  for (const venue of policy.venues) {
+    if (seen.has(venue.project)) continue;
+    seen.add(venue.project);
+    projects.push(venue.project);
+  }
+  return projects;
+}
+
+function exceptAllowed(samples: readonly string[], allowed: readonly string[]): string[] {
+  const taken = new Set(allowed.map((item) => item.toLowerCase()));
+  return samples.filter((item) => !taken.has(item.toLowerCase()));
+}
+
+export function trickChoices(policy: Policy): { allowed: TrickChoiceLists; disallowed: TrickChoiceLists } {
+  const allowed: TrickChoiceLists = {
+    chains: [...policy.allowedChains],
+    assets: [...policy.allowedAssets],
+    projects: uniqueProjects(policy),
+    recipients: [...policy.allowedRecipients],
+  };
+  return {
+    allowed,
+    disallowed: {
+      chains: exceptAllowed(SAMPLE_DISALLOWED.chains, allowed.chains),
+      assets: exceptAllowed(SAMPLE_DISALLOWED.assets, allowed.assets),
+      projects: exceptAllowed(SAMPLE_DISALLOWED.projects, allowed.projects),
+      recipients: exceptAllowed(SAMPLE_DISALLOWED.recipients, allowed.recipients),
+    },
+  };
+}
+
 export function trickCatalog(): {
   ok: true;
   network: "testnet";
   contractId: string | null;
   maxMoveUsd: number;
   presets: TrickPreset[];
+  allowed: TrickChoiceLists;
+  disallowed: TrickChoiceLists;
   limits: { text: number; body: number };
 } {
   const policy = loadPolicy();
+  const choices = trickChoices(policy);
   return {
     ok: true,
     network: "testnet",
     contractId: testnetContractId(),
     maxMoveUsd: policy.maxMoveUsd,
     presets: listPresets(),
+    allowed: choices.allowed,
+    disallowed: choices.disallowed,
     limits: { text: TEXT_MAX, body: BODY_MAX },
   };
 }

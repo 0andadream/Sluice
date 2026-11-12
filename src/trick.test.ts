@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { afterEach, describe, it } from "node:test";
 import { INJECTED } from "./attack-demo.js";
 import { assessAttack } from "./attack-demo.js";
+import { loadPolicy } from "./gate.js";
 import { handleTrick, listPresets, resetTrickLimits, runTrick, TEXT_MAX, type TrickSuccess } from "./trick.js";
 
 const now = new Date("2026-11-12T17:00:00.000Z");
@@ -379,6 +380,52 @@ describe("trick HTTP limits", () => {
       body.presets.map((preset) => preset.id),
       ["cap-attacker", "unlisted-chain", "eth-asset", "reverse-cooldown", "prompt-injection", "allowed-move"],
     );
+    assert.equal(rpc.calls.length, 0);
+  });
+
+  it("lists policy-allowed dropdown values on GET /api/trick", async () => {
+    const policy = loadPolicy();
+    const rpc = mockFetch(() => {
+      throw new Error("GET must not call RPC");
+    });
+    const response = await handleTrick({ method: "GET", fetch: rpc.fetch });
+    assert.equal(response.status, 200);
+    const body = response.body as {
+      ok: boolean;
+      allowed: { chains: string[]; assets: string[]; projects: string[]; recipients: string[] };
+      disallowed: { chains: string[]; assets: string[]; projects: string[]; recipients: string[] };
+    };
+    assert.equal(body.ok, true);
+    assert.deepEqual(body.allowed.chains, [...policy.allowedChains]);
+    assert.deepEqual(body.allowed.assets, [...policy.allowedAssets]);
+    assert.deepEqual(body.allowed.recipients, [...policy.allowedRecipients]);
+    const projects: string[] = [];
+    const seen = new Set<string>();
+    for (const venue of policy.venues) {
+      if (seen.has(venue.project)) continue;
+      seen.add(venue.project);
+      projects.push(venue.project);
+    }
+    assert.deepEqual(body.allowed.projects, projects);
+    assert.ok(body.allowed.chains.includes("base"));
+    assert.ok(body.allowed.chains.includes("solana"));
+    assert.ok(body.allowed.assets.includes("USDC"));
+    assert.ok(body.allowed.projects.includes("fluid-lending"));
+    assert.ok(body.allowed.projects.includes("rhea-lend"));
+    const lists = ["chains", "assets", "projects", "recipients"] as const;
+    for (const key of lists) {
+      const allowed = new Set(body.allowed[key].map((item) => item.toLowerCase()));
+      for (const item of body.disallowed[key]) {
+        assert.equal(allowed.has(item.toLowerCase()), false);
+      }
+    }
+    assert.ok(body.disallowed.chains.includes("ethereum"));
+    assert.ok(body.disallowed.chains.includes("arbitrum"));
+    assert.equal(body.disallowed.chains.includes("solana"), false);
+    assert.deepEqual(body.disallowed.assets, ["ETH", "USDT"]);
+    assert.ok(body.disallowed.projects.includes("uniswap"));
+    assert.ok(body.disallowed.projects.includes("morpho"));
+    assert.deepEqual(body.disallowed.recipients, ["attacker.near"]);
     assert.equal(rpc.calls.length, 0);
   });
 
