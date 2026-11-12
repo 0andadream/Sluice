@@ -24,7 +24,7 @@ npm test
 npm run dry
 ```
 
-You should see the recorded USDC book, a rules proposal for **$10 from Base Fluid to NEAR Rhea**, `Gate: APPROVE` with **net 428 bps**, a veto because a last-approval time is in the future, and a veto for a quote whose recipient, refund address, assets, or amount do not match. The dry quote has no deposit address.
+You should see the recorded USDC book, a deterministic proposal for **$10 from Base Fluid to NEAR Rhea**, `Brain: fallback`, `Proposer: fallback`, `Gate: APPROVE` with **net 428 bps**, a veto because a last-approval time is in the future, and a veto for a quote whose recipient, refund address, assets, or amount do not match. The dry quote has no deposit address.
 
 ```bash
 npm run attack
@@ -49,7 +49,7 @@ From a checkout, with Node.js 22:
 2. `npm test`
 3. `npm run dry`
 4. Confirm the yield table names Rhea Lend on NEAR, Fluid Lending on Base, and Save and Jupiter Lend on Solana, using `apyBase`.
-5. Confirm the proposal is `$10.00 USDC` from `base/fluid-lending` to `near/rhea-lend`, and the brain line says `rules`.
+5. Confirm the proposal is `$10.00 USDC` from `base/fluid-lending` to `near/rhea-lend`, the brain line says `fallback`, and the next line says `Proposer: fallback`.
 6. Confirm `Gate: APPROVE` with gross 498 bps, fee 20 bps, net 428 bps, payback 51.3 days.
 7. Confirm the probes veto $50, `ETH`, a removed destination chain, a cooldown, a last-approval time in the future, and the reverse move.
 8. Confirm the quote gate approves the recorded dry quote, and vetoes a swapped recipient, refund address, from-asset, to-asset, and amount.
@@ -93,8 +93,8 @@ The dry-run stops at the quote. A funded swap would continue only after the on-c
 | Piece | What it does | Where |
 | --- | --- | --- |
 | DefiLlama yields | USDC rates. No key | `src/yields.ts` |
-| Rules brain | The proposal when no model key is set, and when the model call fails | `src/brain.ts` |
-| NEAR AI Cloud | Optional planner. OpenAI-compatible `POST /v1/chat/completions` | `src/brain.ts` |
+| Deterministic proposer | Used when `NEAR_AI_API_KEY` is missing, the call is skipped, or the call fails. The source is `fallback` | `src/brain.ts` |
+| NEAR AI Cloud | `POST https://cloud-api.near.ai/v1/chat/completions`. Default model `z-ai/glm-5.3-flash`. The gate still decides | `src/brain.ts` |
 | Off-chain gate | Deterministic veto, including the quote match | `src/gate.ts` |
 | On-chain gate | The same economic checks, cooldown storage, a decision log, events | `contracts/sluice-gate` |
 | 1Click | Tokens, dry or live quote, status, deposit submit | `src/intents.ts` |
@@ -147,12 +147,13 @@ bash contracts/sluice-gate/deploy.sh <account.testnet>
 
 The tests run in near-sdk's unit-testing VM (`near-vm-runner`). They cover an approval, the cooldown, a future timestamp, the $5,000 injection, and the split between owner and agent. `deploy.sh` builds the wasm and inits the contract with the policy file. It needs the `near` CLI and a testnet account you control. The key stays in the CLI keychain and is not written into this repo.
 
-A copy is deployed on testnet at [`sluice-gate-df46.testnet`](https://testnet.nearblocks.io/address/sluice-gate-df46.testnet).
+The gate is deployed on testnet at [`sluice-0andadream.testnet`](https://testnet.nearblocks.io/address/sluice-0andadream.testnet). On this deployment the owner and the agent are that account, so the recorded veto is signed by the owner. A separate function-call key, limited to `approve`, is still the intended split for an agent process. The full-access key is not in this repo. An earlier copy lived at `sluice-gate-df46.testnet`. This deployment replaces it.
 
-- Deploy: [explorer.testnet.near.org/transactions/StAS6gwiNXqQumrmGGHjFZfMbWe6rHepV46urFmFAya](https://explorer.testnet.near.org/transactions/StAS6gwiNXqQumrmGGHjFZfMbWe6rHepV46urFmFAya)
-- The attack veto, `approve` returning `approved: false` and the `sluice` `decision` event: [explorer.testnet.near.org/transactions/1Qj7CZ4xrhcfpAJDc8unvPBT6AiRoAH3HsyqYKY29rS](https://explorer.testnet.near.org/transactions/1Qj7CZ4xrhcfpAJDc8unvPBT6AiRoAH3HsyqYKY29rS)
+- Account: [testnet.nearblocks.io/address/sluice-0andadream.testnet](https://testnet.nearblocks.io/address/sluice-0andadream.testnet)
+- Deploy: [explorer.testnet.near.org/transactions/9do8su7mm9stWZneo7VGgnHxDC4jb8ynFr96Px1kX6Mm](https://explorer.testnet.near.org/transactions/9do8su7mm9stWZneo7VGgnHxDC4jb8ynFr96Px1kX6Mm)
+- The attack veto, `approve` returning `approved: false` and the `sluice` `decision` event: [testnet.nearblocks.io/txns/6JivSQssiBsX57iLPLNfDmyAGMgfNNWBmEbNr5nhWEMK](https://testnet.nearblocks.io/txns/6JivSQssiBsX57iLPLNfDmyAGMgfNNWBmEbNr5nhWEMK)
 
-`preview` on that contract, with no key, returns the same two reasons: the amount is over the cap, and `attacker.near` is not an allowed recipient. The full-access key that created the account is not in this repo. Redeploy with `deploy.sh` onto an account you hold if you want to administer it.
+`preview` on that contract, with no key, returns the same two reasons for the attack: the amount is over the cap, and `attacker.near` is not an allowed recipient.
 
 Create the account, if you do not have one:
 
@@ -198,19 +199,30 @@ If any of those are missing, the process exits before a funded quote and before 
 
 The Base transfer is an EIP-1559 transaction, chain id 8453, to USDC `0x833589fcd6edb6e08f4c7c32d4f71b54bda02913`, calling `transfer` on the 1Click deposit address for the quoted amount. The payload is `keccak256(0x02 || rlp(...))`, which is what `v1.signer.sign` would be asked to sign on path `base-1` (domain id 0, secp256k1). The derivation view is `derived_public_key` on `v1.signer` (mainnet) or `v1.signer-prod.testnet`. `SLUICE_BASE_ADDRESS` is the explicit signer when you are not deriving one.
 
-This entry does not decode the MPC `SignatureResponse` into `r, s, v`, so `broadcastBase` is not called from the CLI even if every switch is on. `broadcastBase` itself refuses to run unless the process is armed. No mainnet move was executed.
+This entry does not decode the MPC `SignatureResponse` into `r, s, v`, so `broadcastBase` is not called from the CLI even if every switch is on. `broadcastBase` itself refuses to run unless the process is armed. A one-dollar mainnet proof that the owner sends from their own wallet is in [Proof: a real mainnet move](#proof-a-real-mainnet-move). That path does not use a private key.
 
 ## NEAR AI and attestation
 
-With no `NEAR_AI_API_KEY`, the brain stays on the rules proposal and says so. A bad model response, an HTTP error, or a missing key falls back to the rules. The key is not printed.
+With no `NEAR_AI_API_KEY`, the brain stays on the deterministic proposal. The source is `fallback`, and the line is `Proposer: fallback`. A bad model response, an HTTP error, or a missing key does the same and says so. The key is not printed.
 
-When a key is set and the caller asked for the model (`npm run dry:live`), the client posts to `https://cloud-api.near.ai/v1/chat/completions`. If the response has an id, it also calls `GET /v1/signature/<id>?signing_algo=ecdsa` and records the HTTP status. It does **not** verify the signature. Verification, per [the NEAR AI docs](https://docs.near.ai/cloud/verification), is a separate step: preflight the gateway attestation (and every model-attestation candidate when you require a TEE), keep the exact request and response bytes, then check the signature's `signing_address` and `signing_algo` against that evidence. `provider_tee` is the kind that binds a response to a model-serving TEE. A `gateway` signature binds the gateway, not the model. A verified signature still would not approve a move. The gate does.
+Set the key to call NEAR AI for real:
+
+```bash
+export NEAR_AI_API_KEY=sk-...   # from https://cloud.near.ai
+export NEAR_AI_BASE_URL=https://cloud-api.near.ai/v1   # optional; this is the default
+export NEAR_AI_MODEL=z-ai/glm-5.3-flash                 # optional; this is the default
+npm run dry:live
+```
+
+`/control` and `GET /api/state` use the same call. With a key, the page says `Proposer: NEAR AI z-ai/glm-5.3-flash`. Without a key, or if the call fails, it says `Proposer: fallback`. The model proposes JSON. The gate still decides.
+
+The client posts to `https://cloud-api.near.ai/v1/chat/completions`. After a reply it reads `GET /v1/attestation/report` (no API key on that request) and, when the completion has an id, `GET /v1/signature/<id>?signing_algo=ecdsa`. The report can include a gateway Intel quote (`intel_quote`). This process records whether that field was present. It does **not** verify the quote, the event log, a model TEE, or the signature. That check is the [NEAR AI verification guide](https://docs.near.ai/cloud/verification), and a person can inspect one reply at [cloud.near.ai/verify](https://cloud.near.ai/verify). `provider_tee` binds a response to a model-serving TEE. A `gateway` signature binds the gateway, not the model. Doing that check inside this repo would mean parsing Intel quotes and matching measurements. That verifier is a separate project, so `attestation.verified` stays false. A verified signature still would not approve a move. The gate does.
 
 The model is told not to name a recipient. If it does, `claimedRecipient` is passed into the gate and vetoed while `allowedRecipients` is empty. `force`, `approved`, and `skipGate` are dropped by the parser.
 
 ## Landing page
 
-`/` is the landing page in `web/index.html`. A figure walks into a gate that stands for `sluice-gate-df46.testnet`. The gate opens on an approval and shuts on a move over the cap. The **$10** cap is `maxMoveUsd` in `gate.policy.json`. The recorded **$5,000 to `attacker.near`** veto is the testnet transaction [1Qj7CZ4xrhcfpAJDc8unvPBT6AiRoAH3HsyqYKY29rS](https://testnet.nearblocks.io/txns/1Qj7CZ4xrhcfpAJDc8unvPBT6AiRoAH3HsyqYKY29rS). The mark is `web/logo.svg`.
+`/` is the landing page in `web/index.html`. A figure walks into a gate that stands for `sluice-0andadream.testnet`. The gate opens on an approval and shuts on a move over the cap. The **$10** cap is `maxMoveUsd` in `gate.policy.json`. The recorded **$5,000 to `attacker.near`** veto is the testnet transaction [6JivSQssiBsX57iLPLNfDmyAGMgfNNWBmEbNr5nhWEMK](https://testnet.nearblocks.io/txns/6JivSQssiBsX57iLPLNfDmyAGMgfNNWBmEbNr5nhWEMK). The mark is `web/logo.svg`.
 
 ## Try to trick the agent
 
@@ -258,8 +270,8 @@ npm run dry:live
 
 | Variable | Required | What it does |
 | --- | --- | --- |
-| `NEAR_AI_API_KEY` | No | Lets `npm run dry:live` ask NEAR AI. Without it, the rules proposal runs |
-| `NEAR_AI_MODEL` | No | Defaults to `z-ai/glm-5.2` |
+| `NEAR_AI_API_KEY` | No | Lets the brain ask NEAR AI. Without it, the source is `fallback` |
+| `NEAR_AI_MODEL` | No | Defaults to `z-ai/glm-5.3-flash` |
 | `NEAR_AI_BASE_URL` | No | Defaults to `https://cloud-api.near.ai/v1` |
 | `ONECLICK_API_KEY` | No | Switches the gate's fee assumption from 20 bps to 1 bp on USDC routes |
 | `SLUICE_RECIPIENT` | Fresh quote only | Destination address. Not chosen by the model |
@@ -296,9 +308,29 @@ Runtime npm dependencies: none. HTTP is Node's `fetch`.
 
 DefiLlama, NEAR Intents, and NEAR AI Cloud are HTTP services.
 
+## Proof: a real mainnet move
+
+`npm run live:quote` asks 1Click for a real quote, `dry: false`, for **1 USDC from Base to NEAR**. That size is under the $10 cap. The route is Base Fluid to NEAR Rhea, the same venues as the recorded book. The command runs the off-chain gate and `preview` on `sluice-0andadream.testnet` before it requests the quote. It prints a deposit address, the base-unit amount, and the deadline only when both approve and the quote matches `SLUICE_RECIPIENT` and `SLUICE_REFUND_TO`. It does not sign, and it does not broadcast. The owner sends the USDC from their own wallet.
+
+```bash
+export LIVE=1
+export SLUICE_EXECUTE=yes
+export SLUICE_RECIPIENT=<near-account-that-receives-usdc>
+export SLUICE_REFUND_TO=<0x-base-address-for-a-refund>
+npm run live:quote
+```
+
+Send exactly the printed amount of USDC on Base to the printed deposit address before the printed deadline. Then poll until 1Click reports `SUCCESS`, `REFUNDED`, or `FAILED`:
+
+```bash
+npm run live:status -- <depositAddress>
+```
+
+That appends the quote, the gate verdict, the deposit transaction, the destination transaction, and the explorer links to `fixtures/decisions.json`. `/control` shows that row in the history. Neither command reads a mainnet private key.
+
 ## Known limitations
 
-- No mainnet move was executed. The CLI does not assemble an MPC signature into a signed Base transaction, so it cannot broadcast one. `broadcastBase` exists and is tested with a fake RPC. Matt has to approve any live move separately, fund the Base address, and review the signature assembly before it is used.
+- `npm run execute` does not assemble an MPC signature into a signed Base transaction, so it cannot broadcast one. `broadcastBase` exists and is tested with a fake RPC. The owner-signed proof is `npm run live:quote`: after both gates approve, it prints a 1 USDC deposit address and the owner sends that transfer from their own wallet. See [Proof: a real mainnet move](#proof-a-real-mainnet-move).
 - The on-chain gate trusts the APY numbers the agent submits. A prompt cannot change that. A replaced agent binary could. TEE attestation of the agent is not implemented. The NEAR AI response signature is fetched as a status code and is not verified.
 - There is no 1Click testnet. A funded swap would be mainnet. `Q-007` in the hackathon rules says the same.
 - The $10 cap matches liquidity observed on 2026-11-10. A later quote for a larger size can succeed. The policy file is the place to raise the ceiling.
@@ -308,7 +340,7 @@ DefiLlama, NEAR Intents, and NEAR AI Cloud are HTTP services.
 - `https://yields.llama.fi/pools` is read live by `/api/state` with a 4 second timeout and a 5 minute cache. If that route fails, the control page says the live feed is unavailable and shows the saved snapshot in `fixtures/yields.json` (recorded 2026-11-10). `npm run dry` still uses that file unless you pass `--live`.
 - The recorded quote uses a placeholder recipient and the refund address from the 1Click OpenAPI example. No deposit was made to either.
 - Status fixtures follow the documented status enum. They are not swaps this project submitted.
-- NEAR AI was not called for the recorded proposal. The published proposal is the rules proposal. The call path degrades to that proposal when the key is absent.
+- With no `NEAR_AI_API_KEY`, `/control` says `Proposer: fallback` and uses the deterministic proposal. Set the key, from [cloud.near.ai](https://cloud.near.ai), to show `Proposer: NEAR AI z-ai/glm-5.3-flash`. The Intel quote from `GET /v1/attestation/report` is recorded and not verified. See [NEAR AI and attestation](#near-ai-and-attestation).
 - 1Click quotes are mainnet. A dry quote does not reserve liquidity.
 - The function-call key's allowance is not refreshed by topping up the account. If it hits zero, the operator's full-access key has to add a new one.
 - `/api/trick` rate limits per server instance. A new Vercel instance starts with an empty counter. The body cap still applies.

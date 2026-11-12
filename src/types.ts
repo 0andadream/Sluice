@@ -69,15 +69,21 @@ export type Proposal = {
   rationale: string;
 };
 
+export type BrainSource = "near-ai" | "fallback";
+
 export type BrainResult = {
-  source: "rules" | "near-ai";
+  source: BrainSource;
+  /** Set when NEAR AI returned the proposal. Null when the deterministic proposer was used. */
+  model: string | null;
+  /** Control-page label: "NEAR AI <model>" or "fallback". */
+  proposer: string;
   proposal: Proposal;
   note: string;
   /** Set when the model output named a recipient. The gate treats that as a claim, not an instruction. */
   claimedRecipient: string | null;
   attestation: {
-    /** This process does not verify TEE quotes or response signatures. */
-    verified: false;
+    /** True only after the hardware quote and the response signature are checked. This build does not check them. */
+    verified: boolean;
     detail: string;
   };
 };

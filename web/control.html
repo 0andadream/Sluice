@@ -186,7 +186,7 @@
           el(
             "div",
             "stats",
-            `gross ${decision.grossSpreadBps} bps · fee ${decision.feeBps} bps · net ${decision.netSpreadBps} bps · payback ${payback} · ${state.brainSource}`,
+            `gross ${decision.grossSpreadBps} bps · fee ${decision.feeBps} bps · net ${decision.netSpreadBps} bps · payback ${payback} · Proposer: ${state.proposer || "fallback"}`,
           ),
         );
         const best = state.book.bestByChain ?? {};

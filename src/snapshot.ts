@@ -1,6 +1,6 @@
 import { existsSync, readFileSync } from "node:fs";
 import { resolve } from "node:path";
-import { rulesProposal } from "./brain.js";
+import { propose } from "./brain.js";
 import { rootDir } from "./env.js";
 import { evaluateProposal, evaluateQuote, loadPolicy } from "./gate.js";
 import { findUsdc, interpretStatus, loadQuoteFixture, loadTokenFixture, asExecutionStatus } from "./intents.js";
@@ -141,7 +141,14 @@ async function liveBook(
 
 export async function buildPublicState(
   now = new Date(),
-  options: { fetchImpl?: typeof fetch; timeoutMs?: number; cacheMs?: number } = {},
+  options: {
+    fetchImpl?: typeof fetch;
+    timeoutMs?: number;
+    cacheMs?: number;
+    brainFetch?: typeof fetch;
+    env?: NodeJS.ProcessEnv;
+    brainTimeoutMs?: number;
+  } = {},
 ) {
   const policy = loadPolicy();
   let book: YieldBook;
@@ -159,8 +166,13 @@ export async function buildPublicState(
     live = false;
   }
   const age = ageSeconds(book.fetchedAt, now.getTime());
-  const proposal = rulesProposal(book, policy);
-  const decision = evaluateProposal(proposal, book, policy, now, null, false, null);
+  const brain = await propose(book, policy, true, {
+    fetchImpl: options.brainFetch,
+    env: options.env,
+    timeoutMs: options.brainTimeoutMs,
+  });
+  const proposal = brain.proposal;
+  const decision = evaluateProposal(proposal, book, policy, now, null, false, brain.claimedRecipient);
   const probes = [
     {
       title: "$50",
@@ -240,8 +252,11 @@ export async function buildPublicState(
     generatedAt: now.toISOString(),
     book,
     proposal,
-    brainNote: "Rules proposal. NEAR_AI_API_KEY is not set on this page.",
-    brainSource: "rules" as const,
+    brainNote: brain.note,
+    brainSource: brain.source,
+    proposer: brain.proposer,
+    model: brain.model,
+    attestation: brain.attestation,
     decision,
     probes,
     tokens,
