@@ -320,6 +320,7 @@ button.btn:disabled { opacity: 0.65; cursor: wait; }
 label { display: grid; gap: 6px; color: var(--muted); font-size: 12px; letter-spacing: 0.08em; text-transform: uppercase; }
 
 textarea,
+select,
 input[type="text"],
 input[type="number"] {
   width: 100%;
@@ -328,10 +329,58 @@ input[type="number"] {
   background: #12140f;
   color: var(--ink);
   font: 14px/1.45 var(--mono);
+  letter-spacing: 0;
+  text-transform: none;
   padding: 12px 12px;
 }
 
-textarea { min-height: 180px; resize: vertical; letter-spacing: 0; text-transform: none; }
+textarea { min-height: 180px; resize: vertical; }
+
+select {
+  min-height: 46px;
+  padding-right: 40px;
+  cursor: pointer;
+  appearance: none;
+  background-color: #12140f;
+  background-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='12' height='8' viewBox='0 0 12 8' fill='none'><path d='M1 1.5 6 6.5 11 1.5' stroke='%23a39c8c' stroke-width='1.5' stroke-linecap='round' stroke-linejoin='round'/></svg>");
+  background-repeat: no-repeat;
+  background-position: right 14px center;
+  background-size: 12px 8px;
+}
+
+input[type="number"] {
+  appearance: textfield;
+  -moz-appearance: textfield;
+}
+input[type="number"]::-webkit-outer-spin-button,
+input[type="number"]::-webkit-inner-spin-button {
+  -webkit-appearance: none;
+  margin: 0;
+}
+
+.chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+.chip {
+  background: transparent;
+  color: var(--ink);
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  padding: 6px 12px;
+  min-height: 36px;
+  font: inherit;
+  font-size: 13px;
+  letter-spacing: 0;
+  text-transform: none;
+  cursor: pointer;
+}
+.chip:hover { border-color: #4a5140; }
+.chip[aria-pressed="true"] {
+  border-color: var(--lime);
+  color: var(--lime);
+}
 
 .fields {
   display: grid;
@@ -411,4 +460,12 @@ textarea { min-height: 180px; resize: vertical; letter-spacing: 0; text-transfor
   .step p { max-width: none; }
   .spark { display: none; }
   .wrap { width: min(1120px, calc(100% - 32px)); }
+  select,
+  input[type="text"],
+  input[type="number"] {
+    font-size: 16px;
+    min-height: 48px;
+  }
+  textarea { font-size: 16px; }
+  .chip { min-height: 44px; padding: 8px 14px; }
 }
