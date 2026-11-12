@@ -2,7 +2,7 @@ import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { parseProposal, propose } from "./brain.js";
 import { envPresent, loadEnvFile, rootDir } from "./env.js";
-import { evaluateProposal, evaluateQuote, loadPolicy } from "./gate.js";
+import { evaluateProposal, evaluateQuote, loadPolicy, type QuoteExpectation } from "./gate.js";
 import {
   asExecutionStatus,
   buildQuoteRequest,
@@ -189,33 +189,53 @@ async function main(): Promise<void> {
   const brain = await propose(book, policy, live && !fixturesOnly);
   line(`Brain: ${brain.source}`);
   line(`  ${brain.note}`);
+  if (brain.claimedRecipient) line(`  Model named recipient ${brain.claimedRecipient}. The gate treats that as a claim.`);
+  line(`  ${brain.attestation.detail}`);
   printProposal(brain.proposal);
   line("");
 
   const now = new Date();
-  const decision = evaluateProposal(brain.proposal, book, policy, now, null, hasOneClickKey);
+  const decision = evaluateProposal(
+    brain.proposal,
+    book,
+    policy,
+    now,
+    null,
+    hasOneClickKey,
+    brain.claimedRecipient,
+  );
   printDecision("Gate", decision);
   line("");
 
   line("Gate probes. These are not the brain's proposal.");
   const overCap: Proposal = { ...brain.proposal, amountUsd: policy.maxMoveUsd + 40, rationale: "probe over cap" };
-  const overDecision = evaluateProposal(overCap, book, policy, now, null, hasOneClickKey);
+  const overDecision = evaluateProposal(overCap, book, policy, now, null, hasOneClickKey, null);
   printDecision("  amount over cap", overDecision);
   check(!overDecision.approved, "over-cap proposal was approved");
 
   const badAsset: Proposal = { ...brain.proposal, asset: "ETH", rationale: "probe asset" };
-  const assetDecision = evaluateProposal(badAsset, book, policy, now, null, hasOneClickKey);
+  const assetDecision = evaluateProposal(badAsset, book, policy, now, null, hasOneClickKey, null);
   printDecision("  asset ETH", assetDecision);
   check(!assetDecision.approved, "ETH proposal was approved");
 
   const narrowed: Policy = { ...policy, allowedChains: [policy.capitalChain] };
-  const chainDecision = evaluateProposal(brain.proposal, book, narrowed, now, null, hasOneClickKey);
+  const chainDecision = evaluateProposal(brain.proposal, book, narrowed, now, null, hasOneClickKey, null);
   printDecision("  destination chain removed from policy", chainDecision);
   check(!chainDecision.approved, "disallowed chain was approved");
 
-  const cooling = evaluateProposal(brain.proposal, book, policy, now, now, hasOneClickKey);
+  const oneSecondAgo = new Date(now.getTime() - 1000);
+  const cooling = evaluateProposal(brain.proposal, book, policy, now, oneSecondAgo, hasOneClickKey, null);
   printDecision("  approved move one second ago", cooling);
   check(!cooling.approved, "cooldown did not veto");
+
+  const future = new Date(now.getTime() + 60_000);
+  const futureDecision = evaluateProposal(brain.proposal, book, policy, now, future, hasOneClickKey, null);
+  printDecision("  last approval is one minute in the future", futureDecision);
+  check(!futureDecision.approved, "future last-approval was not blocked");
+  check(
+    futureDecision.reasons.some((reason) => reason.includes("future")),
+    "future last-approval did not say so",
+  );
 
   const reverse: Proposal = {
     ...brain.proposal,
@@ -225,14 +245,14 @@ async function main(): Promise<void> {
     toProject: brain.proposal.fromProject,
     rationale: "probe reverse",
   };
-  const reverseDecision = evaluateProposal(reverse, book, policy, now, null, hasOneClickKey);
+  const reverseDecision = evaluateProposal(reverse, book, policy, now, null, hasOneClickKey, null);
   printDecision("  reverse the move", reverseDecision);
   if ((decision.grossSpreadBps ?? 0) > 0) check(!reverseDecision.approved, "reverse move was approved");
 
   const forced = parseProposal({ ...brain.proposal, force: true, approved: true, skipGate: true });
   check(!("error" in forced), "probe proposal did not parse");
   if (!("error" in forced)) {
-    const forcedDecision = evaluateProposal(forced, book, policy, now, null, hasOneClickKey);
+    const forcedDecision = evaluateProposal(forced, book, policy, now, null, hasOneClickKey, null);
     line(
       `  extra force/approved/skipGate fields are dropped by the parser. Gate on that object: ${forcedDecision.approved ? "APPROVE" : "VETO"}. Same economics as the brain proposal: ${forcedDecision.approved === decision.approved}.`,
     );
@@ -332,11 +352,53 @@ async function main(): Promise<void> {
     line(`  depositAddress ${quoted.depositAddress ?? "absent, as documented for dry:true"}`);
     const fees = quote.quoteRequest.appFees ?? [];
     line(`  appFees ${fees.length === 0 ? "none on the response" : fees.map((fee) => `${fee.fee} bps`).join(", ")}`);
-    const quoteDecision = evaluateQuote(policy, quote);
+    const expected: QuoteExpectation = {
+      originAsset: baseUsdc.assetId,
+      destinationAsset: nearUsdc.assetId,
+      amount,
+      recipient: quoteSource === "live" ? recipient : quote.quoteRequest.recipient,
+      refundTo: quoteSource === "live" ? refundTo : quote.quoteRequest.refundTo,
+    };
+    const quoteDecision = evaluateQuote(policy, quote, expected);
     printDecision("Quote gate", quoteDecision);
     check(!quoted.depositAddress, "dry quote included a deposit address");
+    const mismatched = quoteDecision.reasons.some(
+      (reason) => reason.includes("does not match") || reason.includes("is empty") || reason.includes("is missing"),
+    );
+    check(!mismatched, `quote does not match the approved proposal: ${quoteDecision.reasons.join("; ")}`);
+    if (quoteSource === "fixture") check(quoteDecision.approved, "recorded quote was not approved");
   }
   line("");
+
+  const probeBase = resolved.get("base");
+  const probeNear = resolved.get("near");
+  if (probeBase && probeNear) {
+    line("Quote match probes. A quote for another route, recipient, refund address, or amount must veto.");
+    const recorded = loadQuoteFixture();
+    const approved: QuoteExpectation = {
+      originAsset: recorded.quoteRequest.originAsset,
+      destinationAsset: recorded.quoteRequest.destinationAsset,
+      amount: recorded.quoteRequest.amount,
+      recipient: recorded.quoteRequest.recipient,
+      refundTo: recorded.quoteRequest.refundTo,
+    };
+    check(evaluateQuote(policy, recorded, approved).approved, "recorded quote did not match its own request");
+    const cases: Array<[string, (copy: QuoteResponse) => void]> = [
+      ["recipient", (copy) => { copy.quoteRequest.recipient = "attacker.near"; }],
+      ["refund address", (copy) => { copy.quoteRequest.refundTo = "0x0000000000000000000000000000000000000001"; }],
+      ["from-asset", (copy) => { copy.quoteRequest.originAsset = "nep141:not-the-approved-asset.near"; }],
+      ["to-asset", (copy) => { copy.quoteRequest.destinationAsset = "nep141:not-the-approved-asset.near"; }],
+      ["amount", (copy) => { copy.quoteRequest.amount = "5000000000"; copy.quote.amountIn = "5000000000"; }],
+    ];
+    for (const [label, edit] of cases) {
+      const copy = structuredClone(recorded);
+      edit(copy);
+      const verdict = evaluateQuote(policy, copy, approved);
+      printDecision(`  quote ${label} swapped`, verdict);
+      check(!verdict.approved, `swapped ${label} was approved`);
+    }
+    line("");
+  }
 
   line("Status handling uses recorded fixtures. There is no deposit address to poll.");
   const samples: Array<[string, StatusRead["outcome"]]> = [

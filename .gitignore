@@ -5,3 +5,6 @@ dist/
 !.env.example
 *.log
 decisions.jsonl
+target/
+contracts/**/target/
+*.wasm

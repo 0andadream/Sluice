@@ -232,6 +232,19 @@ function isStatus(value: unknown): value is SwapStatus {
   return typeof value === "string" && (SWAP_STATUSES as readonly string[]).includes(value);
 }
 
+function chainHashes(value: unknown): { hash: string; explorerUrl: string }[] | undefined {
+  if (!Array.isArray(value)) return undefined;
+  const hashes: { hash: string; explorerUrl: string }[] = [];
+  for (const row of value) {
+    if (!isRecord(row) || typeof row.hash !== "string" || row.hash.length === 0) continue;
+    hashes.push({
+      hash: row.hash,
+      explorerUrl: typeof row.explorerUrl === "string" ? row.explorerUrl : "",
+    });
+  }
+  return hashes;
+}
+
 export function asExecutionStatus(value: unknown): ExecutionStatus {
   if (!isRecord(value) || !isStatus(value.status)) {
     throw new Error("1Click status response has no known status");
@@ -251,8 +264,10 @@ export function asExecutionStatus(value: unknown): ExecutionStatus {
           amountOut: typeof details.amountOut === "string" ? details.amountOut : undefined,
           amountOutFormatted: typeof details.amountOutFormatted === "string" ? details.amountOutFormatted : undefined,
           nearTxHashes: Array.isArray(details.nearTxHashes)
-            ? details.nearTxHashes.filter((hash): hash is string => typeof hash === "string")
+            ? details.nearTxHashes.filter((hash): hash is string => typeof hash === "string" && hash.length > 0)
             : undefined,
+          originChainTxHashes: chainHashes(details.originChainTxHashes),
+          destinationChainTxHashes: chainHashes(details.destinationChainTxHashes),
         }
       : undefined,
   };

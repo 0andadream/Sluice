@@ -1,0 +1,26 @@
+name: ci
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - uses: dtolnay/rust-toolchain@1.95.0
+        with:
+          targets: wasm32-unknown-unknown
+      - uses: Swatinem/rust-cache@v2
+      - run: npm ci
+      - run: npm run typecheck
+      - run: npm test
+      - run: npm run dry
+      - run: npm run execute -- --plan
+      - run: cargo test --manifest-path contracts/sluice-gate/Cargo.toml
+      - run: npm run attack

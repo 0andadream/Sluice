@@ -1,0 +1,14 @@
+{
+  "framework": null,
+  "buildCommand": "npx tsc -p tsconfig.json",
+  "outputDirectory": "web",
+  "functions": {
+    "api/state.js": {
+      "includeFiles": "../fixtures/**,../gate.policy.json,../contracts/sluice-gate/deployed.json"
+    },
+    "api/dry-quote.js": {
+      "includeFiles": "../fixtures/**,../gate.policy.json",
+      "maxDuration": 30
+    }
+  }
+}

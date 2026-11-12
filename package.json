@@ -12,7 +12,14 @@
     "dry:live": "tsx src/dry-run.ts --live",
     "dry:fixtures": "tsx src/dry-run.ts --fixtures",
     "record-fixtures": "tsx src/dry-run.ts --live --record",
-    "typecheck": "tsc --noEmit"
+    "test": "node --import tsx --test src/*.test.ts",
+    "attack": "tsx scripts/attack.ts",
+    "execute": "tsx src/execute.ts",
+    "control": "tsx src/serve.ts",
+    "typecheck": "tsc --noEmit && tsc --noEmit -p tsconfig.scripts.json",
+    "gate:test": "cargo test --manifest-path contracts/sluice-gate/Cargo.toml",
+    "gate:build": "cargo build --manifest-path contracts/sluice-gate/Cargo.toml --target wasm32-unknown-unknown --release",
+    "gate:sandbox": "cargo test --manifest-path contracts/sluice-gate/Cargo.toml --features sandbox --test sandbox -- --nocapture"
   },
   "devDependencies": {
     "@types/node": "^20.17.10",
