@@ -4,7 +4,11 @@
 
 **The agent proposes. The policy gate decides. Capital flows.**
 
-Live control page: [https://sluice-one.vercel.app](https://sluice-one.vercel.app)
+Live site: [https://sluice-one.vercel.app](https://sluice-one.vercel.app)
+
+- `/` is the landing page.
+- `/play` runs a reply through the parser, the off-chain gate, and the testnet `preview` view.
+- `/control` is the dashboard: the recorded book, the vetoes, and a dry quote.
 
 Built during the [NEAR HACKATHON](https://nearhackathon.com) window (announced 2026-10-19, development through 2026-11-14). The baseline in this repo is the dry-run from 2026-11-10. This tree adds the quote check, the on-chain gate, the live path behind an explicit switch, and the attack demo.
 
@@ -29,6 +33,12 @@ npm run execute -- --plan
 
 `npm run attack` shows a prompt-injected model proposing **$5,000 USDC to `attacker.near`**. The off-chain gate vetoes it, and `cargo test attack_blocks_injected_proposal` vetoes the same arguments inside the NEAR contract. `npm run execute -- --plan` prints the live path and does not sign or broadcast. A sample of the attack output is in `fixtures/attack-sample.txt`.
 
+```bash
+npm run control
+```
+
+That serves [http://127.0.0.1:4173](http://127.0.0.1:4173). `/` is the landing page, `/play` is the trick playground, and `/control` is the dashboard. The playground calls `preview` on the testnet contract. That call is a view. It does not sign, and it does not use mainnet.
+
 Nothing in the default commands spends funds. A funded 1Click swap is mainnet. It is not run here.
 
 ## What a judge runs
@@ -45,6 +55,7 @@ From a checkout, with Node.js 22:
 8. Confirm the quote gate approves the recorded dry quote, and vetoes a swapped recipient, refund address, from-asset, to-asset, and amount.
 9. Confirm `SUCCESS` is settled, `REFUNDED` is refunded, and `FAILED` is failed.
 10. `npm run attack` and `npm run execute -- --plan`. The plan says the on-chain gate was not called and nothing was signed.
+11. `npm run control`, then open `/`, `/play`, and `/control`. On `/play`, the **$5,000 to attacker.near** preset is vetoed by the off-chain gate. With network, the testnet `preview` view returns its own reasons. No key is required and nothing is signed.
 
 `npm run dry:live` reads DefiLlama again and can request a new dry quote. It still does not send funds. If the spread no longer clears 50 bps, the gate prints `VETO` and skips the quote.
 
@@ -88,7 +99,8 @@ The dry-run stops at the quote. A funded swap would continue only after the on-c
 | On-chain gate | The same economic checks, cooldown storage, a decision log, events | `contracts/sluice-gate` |
 | 1Click | Tokens, dry or live quote, status, deposit submit | `src/intents.ts` |
 | Base signer | Chain Signatures derivation and an unsigned USDC transfer. Does not broadcast unless armed | `src/signer.ts`, `src/execute.ts` |
-| Control page | Snapshot age, decision history, a dry-quote button | `web/`, `api/` |
+| Control page | Snapshot age, decision history, a dry-quote button | `web/control.html`, `api/state.js`, `api/dry-quote.js` |
+| Landing and playground | The pitch, and a trick attempt against the parser, the gate, and `preview` | `web/index.html`, `web/play.html`, `api/trick.js` |
 
 Asset ids come from `GET /v0/tokens`. The client keeps the row whose `symbol` is exactly `USDC`. `sUSDC` is in the fixture so a prefix match would be visible, and it is not selected.
 
@@ -196,9 +208,23 @@ When a key is set and the caller asked for the model (`npm run dry:live`), the c
 
 The model is told not to name a recipient. If it does, `claimedRecipient` is passed into the gate and vetoed while `allowedRecipients` is empty. `force`, `approved`, and `skipGate` are dropped by the parser.
 
+## Landing page
+
+`/` is the landing page in `web/index.html`. A figure walks into a gate that stands for `sluice-gate-df46.testnet`. The gate opens on an approval and shuts on a move over the cap. The **$10** cap is `maxMoveUsd` in `gate.policy.json`. The recorded **$5,000 to `attacker.near`** veto is the testnet transaction [1Qj7CZ4xrhcfpAJDc8unvPBT6AiRoAH3HsyqYKY29rS](https://testnet.nearblocks.io/txns/1Qj7CZ4xrhcfpAJDc8unvPBT6AiRoAH3HsyqYKY29rS). The mark is `web/logo.svg`.
+
+## Try to trick the agent
+
+`/play` posts to `api/trick.js`. The handler parses the reply with `parseProposal`, drops `force`, `approved`, and `skipGate`, and runs `evaluateProposal`. It then calls `preview` on the contract in `contracts/sluice-gate/deployed.json` through a testnet JSON-RPC `query`. The host, the account, and the method are fixed in `src/near-preview.ts`. The request cannot choose them.
+
+Presets cover the $5,000 attack, an unlisted chain, ETH instead of USDC, a reverse move inside a simulated cooldown, a prompt-injection blob, and the allowed $10 move. A visitor can also paste text or edit the amount, chains, asset, venues, and recipient. The form replaces the same fields in the reply.
+
+The response has both verdicts and a line such as `I tried to make Sluice send $5,000 to attacker.near. It said no.` If the RPC is unreachable, the off-chain verdict is still returned and the contract check is reported unavailable. The cooldown checkbox changes only the off-chain clock. `preview` reads the cooldown stored on chain and this route never calls `approve`, so it cannot start one.
+
+The body is capped at 12,000 bytes, the reply at 4,000 characters, and each field at 160 characters. One address gets 30 posts a minute on that server instance. The route does not read a key, does not sign, does not broadcast, and does not call mainnet.
+
 ## Control page
 
-`web/` is the static page. `api/state.js` and `api/dry-quote.js` are the Vercel functions. `vercel.json` builds `src/` with `tsc` and publishes `web/`.
+`/control` is the dashboard, in `web/control.html`. `api/state.js`, `api/dry-quote.js`, and `api/trick.js` are the Vercel functions. `vercel.json` builds `src/` with `tsc`, publishes `web/`, and serves `/control` and `/play` without the `.html` suffix.
 
 ```bash
 npm run control
@@ -253,7 +279,7 @@ Do not commit `.env`.
 | `src/signer.ts` | Keccak, the unsigned Base transfer, the MPC sign request |
 | `contracts/sluice-gate` | The NEAR contract, tests, and `deploy.sh` |
 | `scripts/attack.ts` | The prompt-injection demo |
-| `web/`, `api/` | The control page |
+| `web/`, `api/` | Landing page, trick playground, and the control page |
 | `fixtures/` | Recorded book, quote, statuses, attack sample, decision history |
 | `gate.policy.json` | The cap, the allowlists, the 20 bp fee, the empty recipient list |
 
@@ -285,4 +311,6 @@ DefiLlama, NEAR Intents, and NEAR AI Cloud are HTTP services.
 - NEAR AI was not called for the recorded proposal. The published proposal is the rules proposal. The call path degrades to that proposal when the key is absent.
 - 1Click quotes are mainnet. A dry quote does not reserve liquidity.
 - The function-call key's allowance is not refreshed by topping up the account. If it hits zero, the operator's full-access key has to add a new one.
+- `/api/trick` rate limits per server instance. A new Vercel instance starts with an empty counter. The body cap still applies.
+- The playground cannot plant a cooldown on chain. `preview` uses the contract's stored last approval. The checkbox affects only the off-chain gate.
 - Chain-signature signing needs a second account that can attach 1 yoctoNEAR. That account is not created here. Do not reuse the gate's function-call key for it. That key cannot attach a deposit, and it should not be able to call `v1.signer`.
