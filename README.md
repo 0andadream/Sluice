@@ -6,15 +6,16 @@
 
 ## Demo (73s)
 
-[![Watch the Sluice demo: an AI agent is told to send $5,000 to attacker.near, and the NEAR contract vetoes it](docs/demo-thumb.png)](https://github.com/0andadream/Sluice/blob/main/docs/sluice-demo.mp4)
+[![Watch the Sluice demo: an AI agent is told to send $5,000 to attacker.near, and the NEAR contract vetoes it](docs/demo-thumb.png)](https://sluice-one.vercel.app/demo)
 
-▶️ [Watch the demo video](https://github.com/0andadream/Sluice/blob/main/docs/sluice-demo.mp4): the agent gets prompt-injected into sending $5,000 to `attacker.near`, and both the off-chain gate and the `sluice-0andadream.testnet` contract veto it. Then a real NEAR Intents dry quote passes the gate.
+▶️ [Watch the demo video](https://sluice-one.vercel.app/demo): the agent gets prompt-injected into sending $5,000 to `attacker.near`, and both the off-chain gate and the `sluice-0andadream.testnet` contract veto it. Then a real NEAR Intents dry quote passes the gate.
 
 Live site: [https://sluice-one.vercel.app](https://sluice-one.vercel.app)
 
 - `/` is the landing page.
 - `/play` runs a reply through the parser, the off-chain gate, and the testnet `preview` view.
 - `/control` is the dashboard: the recorded book, the vetoes, and a dry quote.
+- `/demo` plays the 73-second demo video.
 
 Built during the [NEAR HACKATHON](https://nearhackathon.com) window (announced 2026-10-19, development through 2026-11-14). The baseline in this repo is the dry-run from 2026-11-10. This tree adds the quote check, the on-chain gate, the live path behind an explicit switch, and the attack demo.
 
