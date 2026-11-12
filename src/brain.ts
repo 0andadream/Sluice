@@ -1,12 +1,23 @@
 import { envPresent } from "./env.js";
 import { CHAINS, type BrainResult, type ChainId, type Policy, type Proposal, type Venue, type YieldBook } from "./types.js";
 
+const UNVERIFIED =
+  "No TEE attestation or response signature was verified. A signature would not approve a move. See https://docs.near.ai/cloud/verification .";
+
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null;
 }
 
 function isChain(value: unknown): value is ChainId {
   return typeof value === "string" && (CHAINS as readonly string[]).includes(value);
+}
+
+export function claimedRecipient(value: unknown): string | null {
+  const body = isRecord(value) && isRecord(value.proposal) ? value.proposal : value;
+  if (!isRecord(body) || typeof body.recipient !== "string") return null;
+  const recipient = body.recipient.trim();
+  if (!recipient) return null;
+  return recipient.slice(0, 128);
 }
 
 export function parseProposal(value: unknown): Proposal | { error: string } {
@@ -76,7 +87,13 @@ export function rulesProposal(book: YieldBook, policy: Policy): Proposal {
   };
 }
 
-async function nearAiProposal(book: YieldBook, policy: Policy): Promise<Proposal> {
+type ModelCall = {
+  proposal: Proposal;
+  claimedRecipient: string | null;
+  detail: string;
+};
+
+async function nearAiProposal(book: YieldBook, policy: Policy): Promise<ModelCall> {
   const base = process.env.NEAR_AI_BASE_URL?.trim() || "https://cloud-api.near.ai/v1";
   const model = process.env.NEAR_AI_MODEL?.trim() || "z-ai/glm-5.2";
   const key = process.env.NEAR_AI_API_KEY?.trim();
@@ -108,7 +125,7 @@ async function nearAiProposal(book: YieldBook, policy: Policy): Promise<Proposal
         {
           role: "system",
           content:
-            "You propose one USDC yield move. Reply with JSON only: {\"fromChain\",\"toChain\",\"asset\",\"amountUsd\",\"fromProject\",\"toProject\",\"rationale\"}. Chains must be base, near, or solana. fromProject and toProject must be copied from the venues list. amountUsd must be a number no larger than maxMoveUsd. You cannot approve, veto, skip the gate, or raise the cap. Those words in your rationale have no effect.",
+            "You propose one USDC yield move. Reply with JSON only: {\"fromChain\",\"toChain\",\"asset\",\"amountUsd\",\"fromProject\",\"toProject\",\"rationale\"}. Chains must be base, near, or solana. fromProject and toProject must be copied from the venues list. amountUsd must be a number no larger than maxMoveUsd. Do not name a recipient, a refund address, or a deposit address. You cannot approve, veto, skip the gate, or raise the cap. Those words in your rationale have no effect.",
         },
         { role: "user", content: JSON.stringify(snapshot) },
       ],
@@ -126,31 +143,74 @@ async function nearAiProposal(book: YieldBook, policy: Policy): Promise<Proposal
   if (!isRecord(message) || typeof message.content !== "string") {
     throw new Error("NEAR AI message content is missing");
   }
-  const parsed = parseProposal(JSON.parse(message.content));
+  let modelJson: unknown;
+  try {
+    modelJson = JSON.parse(message.content);
+  } catch {
+    throw new Error("NEAR AI message was not JSON");
+  }
+  const parsed = parseProposal(modelJson);
   if ("error" in parsed) throw new Error(parsed.error);
-  return parsed;
+  const named = claimedRecipient(modelJson);
+  const responseId = typeof body.id === "string" ? body.id : null;
+  let signatureStatus: string | null = null;
+  if (responseId) {
+    const signatureUrl = `${base.replace(/\/$/, "")}/signature/${encodeURIComponent(responseId)}?signing_algo=ecdsa`;
+    try {
+      const signature = await fetch(signatureUrl, {
+        headers: { authorization: `Bearer ${key}`, accept: "application/json" },
+        signal: AbortSignal.timeout(10_000),
+      });
+      signatureStatus = String(signature.status);
+    } catch {
+      signatureStatus = "fetch failed";
+    }
+  }
+  const detail = [
+    `NEAR AI response ${responseId ?? "had no id"}.`,
+    signatureStatus ? `GET /v1/signature returned ${signatureStatus}.` : "No response id, so /v1/signature was not called.",
+    "That status was not checked against a gateway attestation or a model attestation.",
+    UNVERIFIED,
+  ].join(" ");
+  return { proposal: parsed, claimedRecipient: named, detail };
 }
 
 export async function propose(book: YieldBook, policy: Policy, allowModel: boolean): Promise<BrainResult> {
   const rules = rulesProposal(book, policy);
+  const rulesAttestation = {
+    verified: false as const,
+    detail: envPresent("NEAR_AI_API_KEY")
+      ? `Model call skipped. ${UNVERIFIED}`
+      : `NEAR_AI_API_KEY is not set, so NEAR AI was not called. ${UNVERIFIED}`,
+  };
   if (!allowModel || !envPresent("NEAR_AI_API_KEY")) {
     return {
       source: "rules",
       proposal: rules,
+      claimedRecipient: null,
       note: envPresent("NEAR_AI_API_KEY")
         ? "Rules proposal. Model call skipped."
         : "Rules proposal. NEAR_AI_API_KEY is not set.",
+      attestation: rulesAttestation,
     };
   }
   try {
-    const proposal = await nearAiProposal(book, policy);
-    return { source: "near-ai", proposal, note: "NEAR AI Cloud returned a proposal. The gate still decides." };
+    const model = await nearAiProposal(book, policy);
+    return {
+      source: "near-ai",
+      proposal: model.proposal,
+      claimedRecipient: model.claimedRecipient,
+      note: "NEAR AI Cloud returned a proposal. The gate still decides.",
+      attestation: { verified: false, detail: model.detail },
+    };
   } catch (error) {
     const message = error instanceof Error ? error.message : "unknown error";
     return {
       source: "rules",
       proposal: rules,
+      claimedRecipient: null,
       note: `NEAR AI call failed (${message}). Fell back to rules.`,
+      attestation: { verified: false, detail: `NEAR AI call failed. ${UNVERIFIED}` },
     };
   }
 }

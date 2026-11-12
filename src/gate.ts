@@ -2,6 +2,12 @@ import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { rootDir } from "./env.js";
 import {
+  annualizedCostBps as annualizedCostOf,
+  grossSpreadBps as grossSpreadOf,
+  paybackDays as paybackDaysOf,
+  paybackExceeds,
+} from "./policy-math.js";
+import {
   CHAINS,
   type ChainId,
   type GateDecision,
@@ -45,6 +51,9 @@ export function loadPolicy(path = resolve(rootDir, "gate.policy.json")): Policy 
     return { chain: venue.chain, project: venue.project };
   });
   if (!isChain(body.capitalChain)) throw new Error("gate.policy.json capitalChain is invalid");
+  if (!Array.isArray(body.allowedRecipients) || body.allowedRecipients.some((item) => typeof item !== "string")) {
+    throw new Error("gate.policy.json allowedRecipients must be a string array");
+  }
   const policy: Policy = {
     maxMoveUsd: requiredNumber(body, "maxMoveUsd"),
     allowedAssets: body.allowedAssets as string[],
@@ -61,6 +70,7 @@ export function loadPolicy(path = resolve(rootDir, "gate.policy.json")): Policy 
     cooldownSeconds: requiredNumber(body, "cooldownSeconds"),
     quoteDeadlineSeconds: requiredNumber(body, "quoteDeadlineSeconds"),
     capitalChain: body.capitalChain,
+    allowedRecipients: body.allowedRecipients as string[],
   };
   if (policy.maxMoveUsd <= 0) throw new Error("maxMoveUsd must be positive");
   if (policy.assumedHoldDays <= 0) throw new Error("assumedHoldDays must be positive");
@@ -99,6 +109,7 @@ export function evaluateProposal(
   now: Date,
   lastApprovedAt: Date | null,
   hasOneClickKey: boolean,
+  claimedRecipient: string | null = null,
 ): GateDecision {
   const reasons: string[] = [];
   if (!policy.allowedAssets.includes(proposal.asset)) {
@@ -131,10 +142,17 @@ export function evaluateProposal(
 
   if (lastApprovedAt) {
     const elapsed = now.getTime() - lastApprovedAt.getTime();
-    if (elapsed >= 0 && elapsed < policy.cooldownSeconds * 1000) {
+    if (!Number.isFinite(elapsed) || elapsed < 0) {
+      reasons.push("last approval time is in the future");
+    } else if (elapsed < policy.cooldownSeconds * 1000) {
       const wait = Math.ceil((policy.cooldownSeconds * 1000 - elapsed) / 1000);
       reasons.push(`cooldown has ${wait}s left`);
     }
+  }
+
+  if (claimedRecipient) {
+    const allowed = policy.allowedRecipients.some((item) => sameEndpoint(item, claimedRecipient));
+    if (!allowed) reasons.push(`recipient ${claimedRecipient} is not an allowed recipient`);
   }
 
   const source = findVenue(book, proposal.fromChain, proposal.fromProject);
@@ -150,20 +168,22 @@ export function evaluateProposal(
   let paybackDays: number | null = null;
 
   if (source && dest) {
-    grossSpreadBps = Math.round((dest.decisionApy - source.decisionApy) * 100);
+    grossSpreadBps = grossSpreadOf(dest.decisionApy, source.decisionApy);
     oneTimeCostBps = fee + policy.slippageToleranceBps;
-    annualizedCostBps = Math.round((oneTimeCostBps * 365) / policy.assumedHoldDays);
+    annualizedCostBps = annualizedCostOf(oneTimeCostBps, policy.assumedHoldDays);
     netSpreadBps = grossSpreadBps - annualizedCostBps;
-    paybackDays = grossSpreadBps > 0 ? (oneTimeCostBps * 365) / grossSpreadBps : Number.POSITIVE_INFINITY;
+    paybackDays = paybackDaysOf(oneTimeCostBps, grossSpreadBps);
     if (netSpreadBps < policy.minNetSpreadBps) {
       reasons.push(
         `net spread ${netSpreadBps} bps is below minNetSpreadBps ${policy.minNetSpreadBps} (gross ${grossSpreadBps} bps, annualized cost ${annualizedCostBps} bps)`,
       );
     }
-    if (!Number.isFinite(paybackDays)) {
-      reasons.push("spread is not positive, so the fee and slippage are not earned back");
-    } else if (paybackDays > policy.maxPaybackDays) {
-      reasons.push(`payback ${paybackDays.toFixed(1)} days exceeds maxPaybackDays ${policy.maxPaybackDays}`);
+    if (paybackExceeds(oneTimeCostBps, grossSpreadBps, policy.maxPaybackDays)) {
+      if (grossSpreadBps <= 0) {
+        reasons.push("spread is not positive, so the fee and slippage are not earned back");
+      } else {
+        reasons.push(`payback ${paybackDays.toFixed(1)} days exceeds maxPaybackDays ${policy.maxPaybackDays}`);
+      }
     }
   }
 
@@ -184,30 +204,71 @@ function bpsBetween(amountIn: bigint, amountOut: bigint): number {
   return Number(((amountIn - amountOut) * 10_000n) / amountIn);
 }
 
+/** What the approved proposal is allowed to be quoted as. */
+export type QuoteExpectation = {
+  originAsset: string;
+  destinationAsset: string;
+  amount: string;
+  recipient: string;
+  refundTo: string;
+};
+
+function sameEndpoint(expected: string, actual: string): boolean {
+  const left = expected.trim();
+  const right = actual.trim();
+  if (left.toLowerCase().startsWith("0x") || right.toLowerCase().startsWith("0x")) {
+    return left.toLowerCase() === right.toLowerCase();
+  }
+  return left === right;
+}
+
+function mismatch(
+  reasons: string[],
+  label: string,
+  expected: string,
+  actual: string | undefined,
+  address = false,
+): void {
+  if (!expected) {
+    reasons.push(`approved ${label} is empty`);
+    return;
+  }
+  if (typeof actual !== "string" || actual.length === 0) {
+    reasons.push(`quote ${label} is missing`);
+    return;
+  }
+  const same = address ? sameEndpoint(expected, actual) : expected === actual;
+  if (!same) reasons.push(`quote ${label} does not match the approved ${label}`);
+}
+
 export function evaluateQuote(
   policy: Policy,
   quoteResponse: QuoteResponse,
+  expected: QuoteExpectation,
 ): GateDecision {
   const reasons: string[] = [];
   const quote = quoteResponse.quote;
-  let amountIn: bigint;
-  let minOut: bigint;
+  const request = quoteResponse.quoteRequest;
+  mismatch(reasons, "from-asset", expected.originAsset, request.originAsset);
+  mismatch(reasons, "to-asset", expected.destinationAsset, request.destinationAsset);
+  mismatch(reasons, "recipient", expected.recipient, request.recipient, true);
+  mismatch(reasons, "refund address", expected.refundTo, request.refundTo, true);
+  mismatch(reasons, "amount", expected.amount, request.amount);
+  if (request.amount !== quote.amountIn) {
+    reasons.push("quote amountIn does not match quoteRequest.amount");
+  }
+  if (request.dry === true && quote.depositAddress) {
+    reasons.push("dry quote included a deposit address");
+  }
+  let amountIn = 0n;
+  let minOut = 0n;
   try {
     amountIn = BigInt(quote.amountIn);
     minOut = BigInt(quote.minAmountOut);
+    if (amountIn <= 0n) reasons.push("quote amountIn is not positive");
   } catch {
-    return {
-      approved: false,
-      reasons: ["quote amountIn or minAmountOut is not an integer string"],
-      grossSpreadBps: null,
-      feeBps: null,
-      oneTimeCostBps: null,
-      annualizedCostBps: null,
-      netSpreadBps: null,
-      paybackDays: null,
-    };
+    reasons.push("quote amountIn or minAmountOut is not an integer string");
   }
-  if (amountIn <= 0n) reasons.push("quote amountIn is not positive");
   const amountInUsd = Number(quote.amountInUsd);
   if (!Number.isFinite(amountInUsd)) {
     reasons.push("quote amountInUsd is not a number");
@@ -233,7 +294,7 @@ export function evaluateQuote(
             `amountInUsd ${quote.amountInUsd} is within maxMoveUsd ${policy.maxMoveUsd}`,
             quoteResponse.quoteRequest.dry
               ? "dry quote has no deposit address; nothing to send"
-              : "live quote would expose a deposit address; this phase does not send funds",
+              : "live quote exposes a deposit address; funds move only after the on-chain gate approves and the live switches are set",
           ]
         : reasons,
     grossSpreadBps: null,

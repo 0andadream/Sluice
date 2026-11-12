@@ -1,0 +1,7 @@
+{
+  "network": "testnet",
+  "contractId": "sluice-gate-df46.testnet",
+  "explorerAccount": "https://testnet.nearblocks.io/address/sluice-gate-df46.testnet",
+  "deployTx": "https://explorer.testnet.near.org/transactions/StAS6gwiNXqQumrmGGHjFZfMbWe6rHepV46urFmFAya",
+  "attackVetoTx": "https://explorer.testnet.near.org/transactions/1Qj7CZ4xrhcfpAJDc8unvPBT6AiRoAH3HsyqYKY29rS"
+}

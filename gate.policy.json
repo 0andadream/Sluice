@@ -1,5 +1,5 @@
 {
-  "documentation": "Deterministic veto. A proposal is data. No field in it can skip a check. decision APY is DefiLlama apyBase when that number is finite, otherwise apy. grossSpreadBps = round((destApy - sourceApy) * 100). oneTimeCostBps = feeBps + slippageToleranceBps. feeBps is unauthenticatedFeeBps unless ONECLICK_API_KEY is set, in which case a USDC-to-USDC move uses stablecoinRouteFeeBps. Those two fee numbers are the 1Click schedule at https://docs.near-intents.org/resources/fees.md (25 bps unauthenticated, 1 bp authenticated stablecoin or same-asset). annualizedCostBps = round(oneTimeCostBps * 365 / assumedHoldDays). netSpreadBps = grossSpreadBps - annualizedCostBps. paybackDays = oneTimeCostBps * 365 / grossSpreadBps. On 2026-11-10 a dry EXACT_INPUT quote for 10 USDC from Base to NEAR returned a price, and 25 USDC and 1000 USDC returned 'No liquidity available'. maxMoveUsd is the hard cap, set at the size the API would quote.",
+  "documentation": "Deterministic veto. A proposal is data. No field in it can skip a check. decision APY is DefiLlama apyBase when that number is finite, otherwise apy. grossSpreadBps is the integer form of round((destApy - sourceApy) * 100), computed from apy parts-per-million so the NEAR contract can repeat it. oneTimeCostBps = feeBps + slippageToleranceBps. feeBps is unauthenticatedFeeBps (20) unless ONECLICK_API_KEY is set, in which case a USDC-to-USDC move uses stablecoinRouteFeeBps (1). Hackathon rule Q-006 says a quote without a 1Click JWT costs 0.2%. The fees page fetched 2026-11-12 lists 25 bps without a key and 20 bps with a key (1 bp on stablecoin routes); raise unauthenticatedFeeBps to 25 to charge that higher figure. annualizedCostBps = round(oneTimeCostBps * 365 / assumedHoldDays). netSpreadBps = grossSpreadBps - annualizedCostBps. paybackDays = oneTimeCostBps * 365 / grossSpreadBps. allowedRecipients is empty so a model-supplied recipient is always a veto; the operator address is applied only when the quote is built. On 2026-11-10 a dry EXACT_INPUT quote for 10 USDC from Base to NEAR returned a price, and 25 USDC and 1000 USDC returned 'No liquidity available'. maxMoveUsd is the hard cap, set at the size the API would quote.",
   "maxMoveUsd": 10,
   "allowedAssets": ["USDC"],
   "allowedChains": ["base", "near", "solana"],
@@ -15,7 +15,8 @@
   "minNetSpreadBps": 50,
   "slippageToleranceBps": 50,
   "quoteLossBufferBps": 15,
-  "unauthenticatedFeeBps": 25,
+  "unauthenticatedFeeBps": 20,
+  "allowedRecipients": [],
   "stablecoinRouteFeeBps": 1,
   "assumedHoldDays": 365,
   "maxPaybackDays": 180,

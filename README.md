@@ -1,164 +1,108 @@
 # Sluice
 
+[![ci](https://github.com/0andadream/Sluice/actions/workflows/ci.yml/badge.svg)](https://github.com/0andadream/Sluice/actions/workflows/ci.yml)
+
 **The agent proposes. The policy gate decides. Capital flows.**
 
-Sluice is an autonomous cross-chain yield agent for [NEAR HACKATHON](https://nearhackathon.com), on the DeFi, agents, and security tracks. It reads stablecoin supply rates, proposes one USDC move, and lets a policy file approve or veto that move. A dry quote from NEAR Intents prices an approved move. The model writes the proposal. It does not get a vote after that.
+Live control page: [https://sluice-one.vercel.app](https://sluice-one.vercel.app)
 
-This repository runs the dry path. `npm run dry` needs no key and no funds. A dry quote does not create a deposit address, and nothing in this tree signs or broadcasts a transfer.
+Built during the [NEAR HACKATHON](https://nearhackathon.com) window (announced 2026-10-19, development through 2026-11-14). The baseline in this repo is the dry-run from 2026-11-10. This tree adds the quote check, the on-chain gate, the live path behind an explicit switch, and the attack demo.
 
-- **Tracks:** [DeFi](https://github.com/nearai/near-hackathon-prompt-examples/blob/main/tracks/01-defi.md), [agents](https://github.com/nearai/near-hackathon-prompt-examples/blob/main/tracks/07-agents.md), [security](https://github.com/nearai/near-hackathon-prompt-examples/blob/main/tracks/06-security.md)
-- **Settlement:** NEAR Intents 1Click, `https://1click.chaindefuser.com`
-- **Judge path:** [How a judge runs the dry-run](#how-a-judge-runs-the-dry-run)
+Tracks: [AI Security & Defense](https://github.com/nearai/near-hackathon-prompt-examples/blob/main/tracks/06-security.md) (lead), [DeFi](https://github.com/nearai/near-hackathon-prompt-examples/blob/main/tracks/01-defi.md), [Agent Economy](https://github.com/nearai/near-hackathon-prompt-examples/blob/main/tracks/07-agents.md).
 
----
+## Quickstart
 
-## Contents
+Node.js 22. Rust 1.95 only if you want the contract tests.
 
-- [The problem](#the-problem)
-- [What Sluice does](#what-sluice-does)
-- [How a dry run works](#how-a-dry-run-works)
-- [Architecture](#architecture)
-- [What was quoted](#what-was-quoted)
-- [What the brain does, and what it never does](#what-the-brain-does-and-what-it-never-does)
-- [The gate](#the-gate)
-- [How 1Click settles](#how-1click-settles)
-- [Guarantees](#guarantees)
-- [Running it yourself](#running-it-yourself)
-- [How a judge runs the dry-run](#how-a-judge-runs-the-dry-run)
-- [Testing](#testing)
-- [Project layout](#project-layout)
-- [Libraries](#libraries)
-- [Known limitations](#known-limitations)
+```bash
+npm install
+npm test
+npm run dry
+```
 
----
+You should see the recorded USDC book, a rules proposal for **$10 from Base Fluid to NEAR Rhea**, `Gate: APPROVE` with **net 428 bps**, a veto because a last-approval time is in the future, and a veto for a quote whose recipient, refund address, assets, or amount do not match. The dry quote has no deposit address.
+
+```bash
+npm run attack
+npm run execute -- --plan
+```
+
+`npm run attack` shows a prompt-injected model proposing **$5,000 USDC to `attacker.near`**. The off-chain gate vetoes it, and `cargo test attack_blocks_injected_proposal` vetoes the same arguments inside the NEAR contract. `npm run execute -- --plan` prints the live path and does not sign or broadcast. A sample of the attack output is in `fixtures/attack-sample.txt`.
+
+Nothing in the default commands spends funds. A funded 1Click swap is mainnet. It is not run here.
+
+## What a judge runs
+
+From a checkout, with Node.js 22:
+
+1. `npm install`
+2. `npm test`
+3. `npm run dry`
+4. Confirm the yield table names Rhea Lend on NEAR, Fluid Lending on Base, and Save and Jupiter Lend on Solana, using `apyBase`.
+5. Confirm the proposal is `$10.00 USDC` from `base/fluid-lending` to `near/rhea-lend`, and the brain line says `rules`.
+6. Confirm `Gate: APPROVE` with gross 498 bps, fee 20 bps, net 428 bps, payback 51.3 days.
+7. Confirm the probes veto $50, `ETH`, a removed destination chain, a cooldown, a last-approval time in the future, and the reverse move.
+8. Confirm the quote gate approves the recorded dry quote, and vetoes a swapped recipient, refund address, from-asset, to-asset, and amount.
+9. Confirm `SUCCESS` is settled, `REFUNDED` is refunded, and `FAILED` is failed.
+10. `npm run attack` and `npm run execute -- --plan`. The plan says the on-chain gate was not called and nothing was signed.
+
+`npm run dry:live` reads DefiLlama again and can request a new dry quote. It still does not send funds. If the spread no longer clears 50 bps, the gate prints `VETO` and skips the quote.
+
+Rust, for the contract: `cargo test --manifest-path contracts/sluice-gate/Cargo.toml`.
 
 ## The problem
 
-A yield agent that can move stablecoins can also move them somewhere the operator did not allow. The interesting number, a higher APY on another chain, is also the bait. Reward emissions, a thin pool, or a model that rounds a cap up are enough to turn a research note into a transfer.
-
-The check has to be a function. Same yields, same policy, same answer. The model can explain why it wants the move. It cannot mark the move approved.
+A yield agent that can move stablecoins can also move them somewhere the operator did not allow. The higher APY is also the bait. The check has to be a function. Same yields, same policy, same answer. The model can explain why it wants the move. It cannot mark the move approved.
 
 ## What Sluice does
 
-Sluice compares plain USDC supply on Base, NEAR, and Solana, then proposes leaving the chain where the capital sits for the best allowed venue somewhere else. The policy file is the allowlist: assets, chains, venues, a dollar cap, a minimum net spread, a payback limit, and a cooldown.
-
-The product rests on one boundary:
+Sluice compares plain USDC supply on Base, NEAR, and Solana, then proposes leaving the chain where the capital sits. The policy file is the allowlist: assets, chains, venues, a dollar cap, a minimum net spread, a payback limit, a cooldown, and an empty recipient list so the model cannot name a destination.
 
 > The model proposes a move. The gate decides. No field on the proposal can skip a check.
 
-On 2026-11-10 the rules brain, reading DefiLlama `apyBase`, proposed the policy cap:
-
-| From | To | Size | Why |
-| --- | --- | --- | --- |
-| Base, Fluid Lending, 5.23% | NEAR, Rhea Lend, 10.21% | $10 USDC | 4.98 percentage points of supply APY, inside the cap |
-
-That row is a proposal plus a dry quote. It is not a settlement. The repository holds the quote response and does not hold a deposit transaction.
-
-## How a dry run works
-
-```mermaid
-flowchart LR
-    A["DefiLlama pools"] --> B["Best USDC venue per chain"]
-    B --> C["Rules, or NEAR AI if a key is set"]
-    C --> D["Proposal JSON"]
-    D --> E["Gate"]
-    E --> F["Veto, stop"]
-    E --> G["Dry quote"]
-    G --> H["Quote gate"]
-```
-
-1. **Read yields.** `GET https://yields.llama.fi/pools`. Keep USDC, `stablecoin: true`, single exposure, no impermanent loss, on an allowed venue, with TVL at or above `minTvlUsd`. The decision rate is `apyBase` when DefiLlama sends a finite number. Otherwise it is `apy`.
-2. **Propose.** With no `NEAR_AI_API_KEY`, the rules brain names the best venue on `capitalChain` and the best venue on any other allowed chain, at `maxMoveUsd`. With a key, and only on `npm run dry:live`, NEAR AI Cloud may write that same JSON. A bad model response falls back to the rules.
-3. **Run the gate.** Assets, chains, venues, cents, cooldown, net spread, payback. One failure vetoes. The reasons are all printed.
-4. **Price an approval.** `POST /v0/quote` with `dry: true`, `EXACT_INPUT`, and the slippage in the policy. The client refuses `dry: false` unless `LIVE=1`. The dry-run never sets that.
-5. **Check the quote.** `amountInUsd` must sit inside the cap. The gap from `amountIn` to `minAmountOut` must sit inside slippage plus `quoteLossBufferBps`. A dry response has no `depositAddress`. The run checks that absence.
-6. **Read the status fixtures.** `SUCCESS`, `REFUNDED`, `FAILED`, `INCOMPLETE_DEPOSIT`, and `PENDING_DEPOSIT` are classified from recorded bodies. There is no deposit to poll.
+On 2026-11-10 the rules brain, reading DefiLlama `apyBase`, proposed the policy cap: $10 USDC from Base Fluid Lending at 5.23% to NEAR Rhea Lend at 10.21%. That row is a proposal plus a dry quote. It is not a settlement.
 
 ## Architecture
-
-Two public HTTP APIs and an optional model. The process on your machine is the whole app. It holds no key unless you put one in `.env`, and the dry path does not read one.
 
 ```mermaid
 flowchart TB
     Policy["gate.policy.json"] --> Gate["src/gate.ts"]
+    Policy --> Chain["contracts/sluice-gate"]
     Llama["yields.llama.fi/pools"] --> Yields["src/yields.ts"]
     Yields --> Brain["src/brain.ts"]
-    Cloud["cloud-api.near.ai<br/>optional"] --> Brain
+    Cloud["cloud-api.near.ai optional"] --> Brain
     Brain --> Gate
-    Gate --> Intents["src/intents.ts"]
+    Gate --> Chain
+    Chain --> Intents["src/intents.ts"]
     Intents --> Click["1click.chaindefuser.com"]
-    Click --> Makers["Market makers"]
-    Makers --> Verifier["intents.near verifier"]
 ```
 
-The last two boxes are how a non-dry swap settles. This dry-run stops at the quote.
+The dry-run stops at the quote. A funded swap would continue only after the on-chain gate approves, and only when `--live`, `LIVE=1`, and `SLUICE_EXECUTE=yes` are all set. Those switches are not set by any script in this repo.
 
-### Where each piece fits
-
-| Piece | What it does in Sluice | Where |
+| Piece | What it does | Where |
 | --- | --- | --- |
-| **DefiLlama yields** | Supplies the USDC rates. No key | `src/yields.ts` |
-| **Rules brain** | Writes the proposal when no model key is set, and when the model call fails | `src/brain.ts` |
-| **NEAR AI Cloud** | Optional planner. OpenAI-compatible `POST /v1/chat/completions` at `https://cloud-api.near.ai/v1`. Default model `z-ai/glm-5.2` | `src/brain.ts` |
-| **Gate** | Deterministic veto. Reads only `gate.policy.json` and the numbers | `src/gate.ts` |
-| **1Click** | `GET /v0/tokens`, `POST /v0/quote`, `GET /v0/status`, `POST /v0/deposit/submit` | `src/intents.ts` |
-| **Fixtures** | Recorded tokens, yields, one dry quote, and the five status shapes, so the judge path runs offline | `fixtures/` |
+| DefiLlama yields | USDC rates. No key | `src/yields.ts` |
+| Rules brain | The proposal when no model key is set, and when the model call fails | `src/brain.ts` |
+| NEAR AI Cloud | Optional planner. OpenAI-compatible `POST /v1/chat/completions` | `src/brain.ts` |
+| Off-chain gate | Deterministic veto, including the quote match | `src/gate.ts` |
+| On-chain gate | The same economic checks, cooldown storage, a decision log, events | `contracts/sluice-gate` |
+| 1Click | Tokens, dry or live quote, status, deposit submit | `src/intents.ts` |
+| Base signer | Chain Signatures derivation and an unsigned USDC transfer. Does not broadcast unless armed | `src/signer.ts`, `src/execute.ts` |
+| Control page | Snapshot age, decision history, a dry-quote button | `web/`, `api/` |
 
-Asset ids come from `GET /v0/tokens`. The client keeps the row whose `symbol` is exactly `USDC` and whose `blockchain` is `base`, `near`, or `sol`. One match is required. `sUSDC` is in the fixture so a prefix match would be visible, and it is not selected.
+Asset ids come from `GET /v0/tokens`. The client keeps the row whose `symbol` is exactly `USDC`. `sUSDC` is in the fixture so a prefix match would be visible, and it is not selected.
 
-| Chain | 1Click `blockchain` | `assetId` | Contract |
-| --- | --- | --- | --- |
-| Base | `base` | `nep141:base-0x833589fcd6edb6e08f4c7c32d4f71b54bda02913.omft.near` | `0x833589fcd6edb6e08f4c7c32d4f71b54bda02913` |
-| NEAR | `near` | `nep141:17208628f84f5d6ad33f0da3bbbeb27ffcb398eac501a31bd6ad2011e36133a1` | `17208628f84f5d6ad33f0da3bbbeb27ffcb398eac501a31bd6ad2011e36133a1` |
-| Solana | `sol` | `nep141:sol-5ce3bf3a31af18be40ba30f721101b4341690186.omft.near` | `EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v` |
+| Chain | 1Click `blockchain` | `assetId` |
+| --- | --- | --- |
+| Base | `base` | `nep141:base-0x833589fcd6edb6e08f4c7c32d4f71b54bda02913.omft.near` |
+| NEAR | `near` | `nep141:17208628f84f5d6ad33f0da3bbbeb27ffcb398eac501a31bd6ad2011e36133a1` |
+| Solana | `sol` | `nep141:sol-5ce3bf3a31af18be40ba30f721101b4341690186.omft.near` |
 
-Those ids were the unique `USDC` rows on 2026-11-10. The code does not hardcode them. If the list ever returns two `USDC` rows on one chain, resolution throws.
-
-## What was quoted
-
-Recorded from the live APIs on 2026-11-10 and stored under `fixtures/`. `npm run dry` replays them. `npm run dry:live` asks again.
-
-| Venue | Chain | `apyBase` | Headline `apy` | TVL |
-| --- | --- | --- | --- | --- |
-| Rhea Lend | NEAR | 10.21% | 10.21% | $1.91m |
-| Fluid Lending | Base | 5.23% | 5.23% | $6.08m |
-| Save, Main Pool | Solana | 5.19% | 5.19% | $1.56m |
-| Jupiter Lend, Earn | Solana | 4.76% | 4.76% | $476.54m |
-| Aave V3 | Base | 4.56% | 6.22% | $18.00m |
-
-Aave’s headline rate includes rewards. The gate uses `apyBase`, so Fluid is the Base rate that has to be beaten. Compound V3 on Base is allowlisted and was under the $1m floor, so it is not in the table.
-
-The dry quote that followed the approval, correlation `1f749126-3a5d-46e5-be91-844f8cc9559e`:
-
-| Field | Value |
-| --- | --- |
-| Request | `POST /v0/quote`, `dry: true`, `EXACT_INPUT`, slippage 50 bps |
-| `amountIn` | `10000000` base units, 10 USDC, about $9.995 |
-| `amountOut` | 9.993466 USDC, about $9.989 |
-| `minAmountOut` | `9943498` base units, 56 bps under the input |
-| `timeEstimate` | 35 seconds |
-| `appFees` | 1 bp, injected by 1Click |
-| `depositAddress` | absent |
-
-The same route at 25 USDC and at 1000 USDC returned `No liquidity available`. `maxMoveUsd` is 10 because that is the size the API would quote that day. It is a ceiling. The brain asks for the ceiling. The gate vetoes anything above it.
-
-The [fees page](https://docs.near-intents.org/resources/fees.md) says an unauthenticated non-`ANY_INPUT` quote adds 25 bps, and an authenticated stablecoin or same-asset route is 1 bp. The quote above had no API key and still carried a 1 bp `appFee`. The gate charges the documented 25 bps before it will approve. The quote check then uses the `minAmountOut` the response actually returned.
-
-## What the brain does, and what it never does
-
-The brain returns JSON: `fromChain`, `toChain`, `asset`, `amountUsd`, `fromProject`, `toProject`, `rationale`. Unknown fields are dropped. `force`, `approved`, and `skipGate` do not exist on the object the gate sees.
-
-| Job | Input | Output | Guard |
-| --- | --- | --- | --- |
-| Rules proposal | The yield book and `capitalChain` | One move at `maxMoveUsd`, with the spread in the rationale | Missing venues produce a proposal the gate vetoes |
-| NEAR AI proposal | The same venues, the cap, and the allowed chains | The same JSON shape | Parse failure, HTTP failure, or a missing key uses the rules. The page says which one ran |
-| Fall back | The error string | The rules proposal | The note includes the failure and not the key |
-
-NEAR AI runs only when `NEAR_AI_API_KEY` is set and you ask for the live path. The key stays in `.env`. The dry-run does not print it. The model is not shown the gate’s source, and a persuasive rationale is still just a string.
+Those ids were the unique `USDC` rows on 2026-11-10. The code does not hardcode them.
 
 ## The gate
 
-`gate.policy.json` is the policy. The checks run in `evaluateProposal`. Spread math, when both venues resolve:
+`gate.policy.json` is the policy. `evaluateProposal` and the contract use the same integer rounding as JavaScript `Math.round` on parts-per-million APY, so both sides get gross **498** bps on the recorded book.
 
 ```
 grossSpreadBps     = round((destApy - sourceApy) * 100)
@@ -168,143 +112,177 @@ netSpreadBps       = grossSpreadBps - annualizedCostBps
 paybackDays        = oneTimeCostBps * 365 / grossSpreadBps
 ```
 
-`feeBps` is `unauthenticatedFeeBps` (25) unless `ONECLICK_API_KEY` is set, in which case a USDC-to-USDC move uses `stablecoinRouteFeeBps` (1). `assumedHoldDays` is 365, so the one-time cost is compared with a year of spread. On the recorded book that is gross 498 bps, cost 75 bps, net 423 bps, payback 55.0 days. The minimum net is 50 bps. The maximum payback is 180 days.
+`feeBps` is `unauthenticatedFeeBps` (**20**) unless `ONECLICK_API_KEY` is set, in which case a USDC-to-USDC move uses `stablecoinRouteFeeBps` (**1**). `assumedHoldDays` is 365. On the recorded book that is gross 498 bps, cost 70 bps, net 428 bps, payback 51.3 days. The minimum net is 50 bps. The maximum payback is 180 days.
 
-The quote has a second pass in `evaluateQuote`. It does not reopen the yield decision. It checks the price you would actually be bound by: dollar size, and `minAmountOut` against slippage plus a 15 bp buffer. On the recorded quote the loss is 56 bps and the budget is 65.
+Hackathon rule Q-006 says a quote without a 1Click JWT costs 0.2% (20 bps). The fees page at [docs.near-intents.org](https://docs.near-intents.org/resources/fees.md), read on 2026-11-12, lists 25 bps without a key and 20 bps with a key (1 bp on stablecoin and same-asset routes). The policy uses 20, matching Q-006. Set `unauthenticatedFeeBps` to 25 to charge the higher figure on that page. The gate does not read the quote's `appFees` when it decides the spread. The recorded quote's `appFee` was 1 bp.
 
-A proposal that fails any of these is a veto. The dry-run also forces five probes that are not the brain’s proposal: $50, asset `ETH`, a policy with the destination chain removed, a move approved one second ago, and the same move reversed. Each one vetoes. Stuffing `force: true` onto the object does not change the result.
+A last-approval time in the future is a veto. The old check treated a negative elapsed time as "no cooldown," which let a future timestamp through. `elapsed < 0` now blocks.
 
-## How 1Click settles
+`evaluateQuote` checks that the quote is the approved move: from-asset, to-asset, recipient, refund address, and amount. A quote for a different route or recipient fails even when the price is inside the slippage budget. Dollar size and `minAmountOut` are still checked. A dry quote that contains a `depositAddress` fails.
 
-1Click is the hosted swap API in front of NEAR Intents. The docs describe it as a service that asks [market makers](https://docs.near-intents.org/integration/market-makers/introduction.md) for a price, builds the swap, and tracks it. Makers compete on the message bus. The selected quote settles on the verifier contract, `intents.near`. 1Click does not take custody. For an `ORIGIN_CHAIN` quote the funds move when you send the origin asset to the `depositAddress` in the quote. The swap starts when that deposit is seen.
+`allowedRecipients` is empty. Any recipient the model names is a veto. The operator address is applied later, from `SLUICE_RECIPIENT`, when a quote is built. The model does not choose it.
 
-`POST /v0/quote` with `dry: true` is the preview. The [quote schema](https://docs.near-intents.org/api-reference/oneclick/request-a-swap-quote.md) says a dry response omits `depositAddress`, `deadline`, and `timeWhenInactive`. That is what the recorded response does.
+## On-chain gate
 
-A non-dry quote is the one that can be funded. This client will not request one unless `LIVE=1`. Even then, `submitDepositTxHash` only notifies 1Click of a hash you already broadcast, and the dry-run never calls it. Sending the tokens is a transfer from a wallet this repository does not hold.
+`contracts/sluice-gate` is a Rust contract on `near-sdk` 5.5. It stores the policy, recomputes the spread from the APY parts-per-million the agent submits, enforces the cap, the allowlists, the recipient rule, and the cooldown, and keeps the last approval time. Decisions are stored in a fixed ring of 16 slots allocated at init, so later calls do not need an attached deposit. Each decision emits `EVENT_JSON` with standard `sluice`, version `1.0.0`, event `decision`.
 
-Status comes from `GET /v0/status?depositAddress=...`. If the quote included a `depositMemo`, the memo is required too.
+`preview` is a view. It runs the same checks and writes nothing. `approve` is the change method. Only the configured agent account can call it. Only the owner can call `set_policy`.
 
-| Status | What Sluice does with it |
+```bash
+cargo test --manifest-path contracts/sluice-gate/Cargo.toml
+bash contracts/sluice-gate/deploy.sh <account.testnet>
+```
+
+The tests run in near-sdk's unit-testing VM (`near-vm-runner`). They cover an approval, the cooldown, a future timestamp, the $5,000 injection, and the split between owner and agent. `deploy.sh` builds the wasm and inits the contract with the policy file. It needs the `near` CLI and a testnet account you control. The key stays in the CLI keychain and is not written into this repo.
+
+A copy is deployed on testnet at [`sluice-gate-df46.testnet`](https://testnet.nearblocks.io/address/sluice-gate-df46.testnet).
+
+- Deploy: [explorer.testnet.near.org/transactions/StAS6gwiNXqQumrmGGHjFZfMbWe6rHepV46urFmFAya](https://explorer.testnet.near.org/transactions/StAS6gwiNXqQumrmGGHjFZfMbWe6rHepV46urFmFAya)
+- The attack veto, `approve` returning `approved: false` and the `sluice` `decision` event: [explorer.testnet.near.org/transactions/1Qj7CZ4xrhcfpAJDc8unvPBT6AiRoAH3HsyqYKY29rS](https://explorer.testnet.near.org/transactions/1Qj7CZ4xrhcfpAJDc8unvPBT6AiRoAH3HsyqYKY29rS)
+
+`preview` on that contract, with no key, returns the same two reasons: the amount is over the cap, and `attacker.near` is not an allowed recipient. The full-access key that created the account is not in this repo. Redeploy with `deploy.sh` onto an account you hold if you want to administer it.
+
+Create the account, if you do not have one:
+
+```bash
+near account create-account sponsor-by-faucet-service <name>.testnet \
+  autogenerate-new-keypair save-to-keychain network-config testnet create
+```
+
+### The function-call key
+
+The agent does not get a full-access key. Add a second key on the agent account that can call only this contract:
+
+```bash
+near account add-key <agent-account> grant-function-call-access \
+  --allowance '1 NEAR' \
+  --receiver-account-id <gate-account> \
+  --method-names 'approve' \
+  use-manually-provided-public-key <ed25519:...> \
+  network-config testnet sign-with-keychain send
+```
+
+Check the flags against `near account add-key --help`. The method list is the point: **`approve` only**. `set_policy` is not on it, so the agent cannot rewrite the cap or the allowlist. View methods do not need a key.
+
+What that key cannot do, from the [access keys](https://docs.near.org/protocol/accounts-contracts/access-keys) page:
+
+- It can call only `<gate-account>`. It cannot call `v1.signer`, a token contract, or any other account.
+- It cannot attach NEAR. `approve` is not payable, so that is enough for the gate. `v1.signer.sign` requires 1 yoctoNEAR (`SIGN_DEPOSIT_YOCTONEAR` in the MPC contract), so this key cannot request a chain signature.
+- It cannot transfer NEAR, add or delete keys, delete the account, or deploy code.
+- The allowance is gas, charged at the buy price and refunded later. If it runs out, the key is dead. Adding NEAR to the account does not refill it. Leave a full-access key with the operator, offline from the agent, so a new function-call key can be added. An account whose only keys are exhausted function-call keys cannot sign anything.
+
+The agent process should be given only that key in the near CLI keychain. This repository never reads a raw secret from the environment and never puts one in git.
+
+## Live path
+
+`npm run execute` and `npm run execute -- --plan` print the steps and stop. A funded move needs all of:
+
+- the CLI flag `--live`
+- `LIVE=1`
+- `SLUICE_EXECUTE=yes`
+- `SLUICE_GATE_CONTRACT`, `SLUICE_NEAR_ACCOUNT_ID`, `SLUICE_RECIPIENT`, `SLUICE_REFUND_TO`, `SLUICE_BASE_RPC`, and `SLUICE_SIGNER_ACCOUNT`
+
+If any of those are missing, the process exits before a funded quote and before a signature. `runLiveMove` will not request a quote until it has an on-chain approval, and it will not sign if `evaluateQuote` rejects the route. Status polling classifies `SUCCESS`, `REFUNDED`, and `FAILED`, and prints explorer links when the body has them.
+
+The Base transfer is an EIP-1559 transaction, chain id 8453, to USDC `0x833589fcd6edb6e08f4c7c32d4f71b54bda02913`, calling `transfer` on the 1Click deposit address for the quoted amount. The payload is `keccak256(0x02 || rlp(...))`, which is what `v1.signer.sign` would be asked to sign on path `base-1` (domain id 0, secp256k1). The derivation view is `derived_public_key` on `v1.signer` (mainnet) or `v1.signer-prod.testnet`. `SLUICE_BASE_ADDRESS` is the explicit signer when you are not deriving one.
+
+This entry does not decode the MPC `SignatureResponse` into `r, s, v`, so `broadcastBase` is not called from the CLI even if every switch is on. `broadcastBase` itself refuses to run unless the process is armed. No mainnet move was executed.
+
+## NEAR AI and attestation
+
+With no `NEAR_AI_API_KEY`, the brain stays on the rules proposal and says so. A bad model response, an HTTP error, or a missing key falls back to the rules. The key is not printed.
+
+When a key is set and the caller asked for the model (`npm run dry:live`), the client posts to `https://cloud-api.near.ai/v1/chat/completions`. If the response has an id, it also calls `GET /v1/signature/<id>?signing_algo=ecdsa` and records the HTTP status. It does **not** verify the signature. Verification, per [the NEAR AI docs](https://docs.near.ai/cloud/verification), is a separate step: preflight the gateway attestation (and every model-attestation candidate when you require a TEE), keep the exact request and response bytes, then check the signature's `signing_address` and `signing_algo` against that evidence. `provider_tee` is the kind that binds a response to a model-serving TEE. A `gateway` signature binds the gateway, not the model. A verified signature still would not approve a move. The gate does.
+
+The model is told not to name a recipient. If it does, `claimedRecipient` is passed into the gate and vetoed while `allowedRecipients` is empty. `force`, `approved`, and `skipGate` are dropped by the parser.
+
+## Control page
+
+`web/` is the static page. `api/state.js` and `api/dry-quote.js` are the Vercel functions. `vercel.json` builds `src/` with `tsc` and publishes `web/`.
+
+```bash
+npm run control
+```
+
+That serves `http://127.0.0.1:4173`. The page shows how old the yield snapshot is, the decision, the vetoes, and the decision history. Explorer links appear when a decision has one. **Run live dry quote** posts to `/api/dry-quote`. The server uses `SLUICE_RECIPIENT` and `SLUICE_REFUND_TO` from its own environment. The browser cannot supply an address. The quote is `dry: true`. If those variables are unset, the button returns an error and no quote is requested.
+
+Redeploy the existing Vercel project from this repo so the page and the API ship together. The previous live site was a static snapshot whose source was not in the repo.
+
+## Security model
+
+| Boundary | What holds |
 | --- | --- |
-| `PENDING_DEPOSIT` | Keep polling. The deposit is not in yet |
-| `KNOWN_DEPOSIT_TX` | Keep polling. The deposit transaction was seen |
-| `PROCESSING` | Keep polling. Makers are filling |
-| `SUCCESS` | Stop. The destination asset was delivered |
-| `INCOMPLETE_DEPOSIT` | Stop. The deposit was short. On `EXACT_INPUT`, a deposit below `amountIn` is refunded by the deadline |
-| `REFUNDED` | Stop. The swap failed and the funds were returned to `refundTo` |
-| `FAILED` | Stop. The swap hit an error. A refunded amount is reported when the body has one |
+| The model | Proposes seven fields. Cannot approve, cannot name a recipient, cannot raise the cap. |
+| Off-chain gate | Allowlists, cap, spread, payback, cooldown, future timestamp, quote match. |
+| On-chain gate | The same economic checks, stored cooldown, event log. APY numbers are the agent's, not the model's. |
+| Function-call key | `approve` on the gate contract only. No deposit, no other contract, no `v1.signer`. |
+| Quote | Must match from-asset, to-asset, recipient, refund address, and amount before any signature. |
+| Live switches | `--live` and `LIVE=1` and `SLUICE_EXECUTE=yes`, plus the account config. Default is off. |
 
-`REFUNDED` is the automatic refund. Excess above `amountIn` on an `EXACT_INPUT` swap is also returned to `refundTo` after the swap completes. `FAILED` is not described as the same path. The reader says so instead of inventing a refund the body did not carry.
-
-There is no 1Click testnet. A funded swap would be mainnet. This tree does not fund one.
-
-## Guarantees
-
-The dry-run checks these on every `npm run dry`. A failed check throws and the process exits non-zero.
-
-| Guarantee | How | Where |
-| --- | --- | --- |
-| The model cannot approve its own move | The parser keeps seven fields. `evaluateProposal` has no override argument | `src/brain.ts`, `src/gate.ts` |
-| The cap is the cap | `amountUsd` must be a positive whole-cent value at or under `maxMoveUsd`. The quote’s `amountInUsd` is checked again | `src/gate.ts` |
-| The asset and the chains are the allowlist | `USDC`, and `base`, `near`, `solana`, both ends on an allowed venue that survived the TVL floor | `gate.policy.json` |
-| A thin spread loses | Net spread after the documented fee and the slippage budget, and payback inside `maxPaybackDays` | `src/gate.ts` |
-| A second move waits | `cooldownSeconds` is 3600, measured from the last approval | `src/gate.ts` |
-| A dry quote cannot grow a deposit address in secret | `dry` defaults to true. `dry: false` throws unless `LIVE=1`. The run asserts the address is absent | `src/intents.ts`, `src/dry-run.ts` |
-| Notifying 1Click of a deposit is the same switch | `POST /v0/deposit/submit` throws unless `LIVE=1`. The dry-run does not call it | `src/intents.ts` |
-| Token ids are not guessed | Exactly one `symbol === "USDC"` row for that 1Click blockchain | `src/intents.ts` |
-| The server cannot spend | No wallet, no seed, no signing code. Keys live in `.env`, which is gitignored | `src/intents.ts` |
+A modified agent binary could still submit false APY numbers. The contract checks the math on the numbers it is given and logs them. It does not fetch DefiLlama. Binding those numbers to a TEE-attested agent is the next step, and it is not implemented here. The NEAR AI path records the signature endpoint and does not verify it.
 
 ## Running it yourself
-
-Node.js 20 or newer.
 
 ```bash
 npm install
 npm run dry
-```
-
-That is the offline path. It prints the recorded yields, the rules proposal, the approval, the five vetoes, the three USDC asset ids, the dry quote, and the status classifications.
-
-To read the APIs again:
-
-```bash
-cp .env.example .env
+cp .env.example .env   # optional, for a fresh dry quote
 npm run dry:live
 ```
 
-A new dry quote needs `SLUICE_RECIPIENT` (a NEAR account, because the destination is USDC on NEAR) and `SLUICE_REFUND_TO` (an `0x` address on Base). Still `dry: true`. Still no deposit address. `npm run record-fixtures` overwrites `fixtures/` with that live read. Do not commit `.env`.
-
 | Variable | Required | What it does |
 | --- | --- | --- |
-| `NEAR_AI_API_KEY` | No | Lets `npm run dry:live` ask NEAR AI Cloud. Without it, the rules proposal runs |
+| `NEAR_AI_API_KEY` | No | Lets `npm run dry:live` ask NEAR AI. Without it, the rules proposal runs |
 | `NEAR_AI_MODEL` | No | Defaults to `z-ai/glm-5.2` |
 | `NEAR_AI_BASE_URL` | No | Defaults to `https://cloud-api.near.ai/v1` |
-| `ONECLICK_API_KEY` | No | Partner JWT, sent as `X-API-Key`. Switches the gate’s fee assumption from 25 bps to 1 bp on USDC routes |
-| `ONECLICK_BASE_URL` | No | Defaults to `https://1click.chaindefuser.com` |
-| `SLUICE_RECIPIENT` | Only for a fresh quote | Destination address. Not read by `npm run dry` |
-| `SLUICE_REFUND_TO` | Only for a fresh quote | Refund address on the origin chain |
+| `ONECLICK_API_KEY` | No | Switches the gate's fee assumption from 20 bps to 1 bp on USDC routes |
+| `SLUICE_RECIPIENT` | Fresh quote only | Destination address. Not chosen by the model |
+| `SLUICE_REFUND_TO` | Fresh quote only | Refund address on the origin chain |
+| `SLUICE_GATE_CONTRACT` | Live move only | The deployed gate |
+| `LIVE`, `SLUICE_EXECUTE` | Live move only | Both required, with `--live`. Leave them unset |
 
-`LIVE=1` is the switch that would allow `dry: false` and `POST /v0/deposit/submit`. Nothing in the dry-run sets it. Setting it does not create a signer.
-
-## How a judge runs the dry-run
-
-From a checkout of this repository, with Node.js 20:
-
-1. Run `npm install`.
-2. Run `npm run dry`. No `.env` is required.
-3. Confirm the yield table names Rhea Lend on NEAR, Fluid Lending on Base, and Save and Jupiter Lend on Solana, with the decision rate taken from `apyBase`.
-4. Confirm the proposal is `$10.00 USDC` from `base/fluid-lending` to `near/rhea-lend`, and that the brain line says `rules`.
-5. Confirm `Gate: APPROVE` with net 423 bps. Confirm the probes veto a $50 size, asset `ETH`, a removed destination chain, the cooldown, and the reverse move.
-6. Confirm the three `USDC` asset ids match the table in [Architecture](#architecture), and that the quote’s `depositAddress` line says it is absent.
-7. Confirm `REFUNDED` is classified as refunded and `FAILED` as failed.
-
-`npm run dry:live` is the same path against the network. It can change the numbers. It still does not send funds. If the spread no longer clears 50 bps, the gate prints `VETO` and skips the quote. That is the gate working.
-
-## Testing
-
-```bash
-npm run typecheck
-npm run dry
-```
-
-`npm run dry` is the behavioral check. It throws if an over-cap proposal is approved, if `ETH` is approved, if the cooldown does not veto, if a `force` field changes the decision, if `dry: false` is accepted without `LIVE=1`, or if the dry quote contains a deposit address. It does not broadcast, and it does not spend.
+Do not commit `.env`.
 
 ## Project layout
 
 | Path | What it holds |
 | --- | --- |
-| `src/yields.ts` | DefiLlama read, venue filter, best venue per chain |
-| `src/brain.ts` | Rules proposal, optional NEAR AI proposal, JSON parse |
-| `src/gate.ts` | Policy load, proposal veto, quote veto |
-| `src/intents.ts` | 1Click tokens, dry quote, status, the `LIVE` switch |
-| `src/dry-run.ts` | The command the judge runs |
-| `src/types.ts` | The shared shapes |
-| `gate.policy.json` | The cap, the allowlists, the spread rule, the cooldown |
-| `fixtures/` | The recorded book, tokens, dry quote, and status bodies |
-| `.env.example` | The variable names, with empty values |
+| `src/gate.ts` | Proposal veto and quote match |
+| `src/brain.ts` | Rules proposal, optional NEAR AI, JSON parse |
+| `src/execute.ts` | The live path. Refuses to run unless armed |
+| `src/signer.ts` | Keccak, the unsigned Base transfer, the MPC sign request |
+| `contracts/sluice-gate` | The NEAR contract, tests, and `deploy.sh` |
+| `scripts/attack.ts` | The prompt-injection demo |
+| `web/`, `api/` | The control page |
+| `fixtures/` | Recorded book, quote, statuses, attack sample, decision history |
+| `gate.policy.json` | The cap, the allowlists, the 20 bp fee, the empty recipient list |
 
 ## Libraries
 
-Runtime dependencies: none. HTTP is Node’s `fetch`.
+Runtime npm dependencies: none. HTTP is Node's `fetch`.
 
 | Package | Role |
 | --- | --- |
 | `typescript` 5.7 | `npm run typecheck` |
-| `tsx` 4.19 | Runs `src/dry-run.ts` on Node 20 |
-| `@types/node` 20 | Types for `fetch`, `fs`, and the process |
+| `tsx` 4.19 | Runs the TypeScript entrypoints |
+| `@types/node` 20 | Node types |
+| `near-sdk` 5.5 | The gate contract. Not an npm dependency |
 
-DefiLlama, NEAR Intents, and NEAR AI Cloud are HTTP services, not packages in this repo.
+DefiLlama, NEAR Intents, and NEAR AI Cloud are HTTP services.
 
 ## Known limitations
 
-- The agent loop, the `decisions.jsonl` log, the Sluice Control page, and the Rhea supply step are not in this repository. The dry-run ends at a quote.
-- There is no signer. A non-dry 1Click swap needs a wallet to send USDC to a deposit address. `LIVE=1` only unlocks the HTTP calls that would sit beside that transfer.
-- The $10 cap matches liquidity observed on 2026-11-10. A later quote for a larger size can succeed, and the policy file is the place to raise the ceiling.
-- The gate assumes a 25 bp unauthenticated fee. The stablecoin quote that day reported 1 bp. The stricter number is the one that has to clear.
-- Reward APY is ignored on purpose. A venue that pays in emissions can outrank a venue that pays in supply interest, and it will not win here.
-- Kamino’s USDC markets are not on the venue list. Solana is Jupiter Lend and Save.
-- `https://yields.llama.fi/pools` answered on 2026-11-10. `https://yields.llama.fi/yields/v1/pools` returned 404 the same day. If the old route is removed, the live read fails and `npm run dry` still uses `fixtures/yields.json`.
-- The recorded quote names a placeholder recipient, an implicit NEAR account of `b` repeated, and the refund address from the 1Click OpenAPI example. They are fields in a dry response. No deposit was made to either.
+- No mainnet move was executed. The CLI does not assemble an MPC signature into a signed Base transaction, so it cannot broadcast one. `broadcastBase` exists and is tested with a fake RPC. Matt has to approve any live move separately, fund the Base address, and review the signature assembly before it is used.
+- The on-chain gate trusts the APY numbers the agent submits. A prompt cannot change that. A replaced agent binary could. TEE attestation of the agent is not implemented. The NEAR AI response signature is fetched as a status code and is not verified.
+- There is no 1Click testnet. A funded swap would be mainnet. `Q-007` in the hackathon rules says the same.
+- The $10 cap matches liquidity observed on 2026-11-10. A later quote for a larger size can succeed. The policy file is the place to raise the ceiling.
+- The unauthenticated fee in this policy is 20 bps, from hackathon rule Q-006. The fees page currently also prints 25 bps without a key. See [The gate](#the-gate).
+- The move is a USDC transfer into 1Click, not a deposit into Rhea. The destination is the recipient account. Supplying on Rhea is not in this tree.
+- Reward APY is ignored on purpose. Kamino's USDC markets are not on the venue list.
+- `https://yields.llama.fi/pools` answered on 2026-11-10. If that route is removed, the live read fails and `npm run dry` still uses `fixtures/yields.json`. The control page shows the age of that snapshot.
+- The recorded quote uses a placeholder recipient and the refund address from the 1Click OpenAPI example. No deposit was made to either.
 - Status fixtures follow the documented status enum. They are not swaps this project submitted.
-- NEAR AI was not called while this was recorded. The published proposal is the rules proposal.
-- 1Click quotes are mainnet. A dry quote does not reserve liquidity. The next live read can return `No liquidity available` for the same $10.
+- NEAR AI was not called for the recorded proposal. The published proposal is the rules proposal. The call path degrades to that proposal when the key is absent.
+- 1Click quotes are mainnet. A dry quote does not reserve liquidity.
+- The function-call key's allowance is not refreshed by topping up the account. If it hits zero, the operator's full-access key has to add a new one.
+- Chain-signature signing needs a second account that can attach 1 yoctoNEAR. That account is not created here. Do not reuse the gate's function-call key for it. That key cannot attach a deposit, and it should not be able to call `v1.signer`.

@@ -34,6 +34,8 @@ export type Policy = {
   cooldownSeconds: number;
   quoteDeadlineSeconds: number;
   capitalChain: ChainId;
+  /** Addresses the model is allowed to name. Empty means the model may not name one. */
+  allowedRecipients: string[];
 };
 
 export type Venue = {
@@ -71,6 +73,13 @@ export type BrainResult = {
   source: "rules" | "near-ai";
   proposal: Proposal;
   note: string;
+  /** Set when the model output named a recipient. The gate treats that as a claim, not an instruction. */
+  claimedRecipient: string | null;
+  attestation: {
+    /** This process does not verify TEE quotes or response signatures. */
+    verified: false;
+    detail: string;
+  };
 };
 
 export type GateDecision = {
