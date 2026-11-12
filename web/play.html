@@ -1,0 +1,318 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Try to trick Sluice</title>
+    <meta
+      name="description"
+      content="Paste a model reply or edit a move. Sluice runs the real parser, the off-chain gate, and a free preview on sluice-gate-df46.testnet. Nothing is signed."
+    />
+    <link rel="icon" href="/logo.svg" type="image/svg+xml" />
+    <link rel="preload" href="/fonts/instrument-serif-latin.woff2" as="font" type="font/woff2" crossorigin />
+    <link rel="stylesheet" href="/site.css" />
+    <link rel="canonical" href="https://sluice-one.vercel.app/play" />
+    <meta property="og:title" content="Try to trick Sluice" />
+    <meta
+      property="og:description"
+      content="An AI yield agent that can’t overspend, because a NEAR contract has the final say."
+    />
+    <meta property="og:type" content="website" />
+    <meta property="og:url" content="https://sluice-one.vercel.app/play" />
+    <meta property="og:image" content="https://sluice-one.vercel.app/og.png" />
+    <meta property="og:image:width" content="1200" />
+    <meta property="og:image:height" content="630" />
+    <meta name="twitter:card" content="summary_large_image" />
+    <meta name="twitter:title" content="Try to trick Sluice" />
+    <meta
+      name="twitter:description"
+      content="An AI yield agent that can’t overspend, because a NEAR contract has the final say."
+    />
+    <meta name="twitter:image" content="https://sluice-one.vercel.app/og.png" />
+    <meta name="theme-color" content="#14160f" />
+  </head>
+  <body>
+    <div class="wrap">
+      <header class="nav">
+        <a class="brand" href="/">
+          <span class="mark" role="img" aria-label="Sluice"></span>
+          Sluice
+        </a>
+        <nav aria-label="Primary">
+          <a href="/#how">How it works</a>
+          <a href="/play" aria-current="page">Play</a>
+          <a href="/control">Control</a>
+          <a href="https://github.com/0andadream/Sluice" rel="noopener noreferrer">GitHub</a>
+        </nav>
+      </header>
+      <main>
+        <header class="page-head">
+          <h1>Try to trick the agent.</h1>
+          <p class="lede">
+            Paste a model reply or edit the move. Sluice runs the real parser, the off-chain gate, and a free
+            <code>preview</code> on sluice-gate-df46.testnet. Nothing is signed.
+          </p>
+        </header>
+        <div class="presets" id="presets" role="group" aria-label="Preset attacks"></div>
+        <p class="blurb" id="blurb">Pick an attack, or write your own.</p>
+        <form class="editor" id="form">
+          <label>
+            Agent output
+            <textarea id="text" name="text" maxlength="4000" spellcheck="false" placeholder="Paste the model reply, including any force or skipGate flags."></textarea>
+          </label>
+          <div class="fields">
+            <label>Amount, USD <input id="amountUsd" name="amountUsd" type="text" inputmode="decimal" autocomplete="off" /></label>
+            <label>Asset <input id="asset" name="asset" type="text" autocomplete="off" /></label>
+            <label>From chain <input id="fromChain" name="fromChain" type="text" autocomplete="off" /></label>
+            <label>To chain <input id="toChain" name="toChain" type="text" autocomplete="off" /></label>
+            <label>From venue <input id="fromProject" name="fromProject" type="text" autocomplete="off" /></label>
+            <label>To venue <input id="toProject" name="toProject" type="text" autocomplete="off" /></label>
+            <label class="wide">Recipient <input id="recipient" name="recipient" type="text" autocomplete="off" placeholder="Leave empty. The model is not allowed to name one." /></label>
+            <label class="wide">Rationale <input id="rationale" name="rationale" type="text" autocomplete="off" /></label>
+          </div>
+          <label class="check">
+            <input id="cooldown" type="checkbox" />
+            <span>Simulate a cooldown on the off-chain gate, 60 seconds after an approval. The contract keeps its own clock. This does not call approve.</span>
+          </label>
+          <div class="actions">
+            <button class="btn btn-lime" id="run" type="submit">Run it through the gate</button>
+          </div>
+          <p class="fine">View call only, on testnet. No key, no signature, no broadcast, no mainnet. Replies are capped at 4,000 characters.</p>
+        </form>
+        <section class="results" id="results" aria-live="polite">
+          <article class="share">
+            <p id="share">The two verdicts show up here. The $5,000 attack is the one from the landing page.</p>
+          </article>
+        </section>
+      </main>
+      <footer class="foot">
+        <a class="badge" href="https://nearhackathon.com" rel="noopener noreferrer">
+          <svg viewBox="0 0 16 16" width="14" height="14" aria-hidden="true" fill="currentColor">
+            <rect x="1" y="1" width="6" height="6" />
+            <rect x="9" y="1" width="6" height="6" />
+            <rect x="1" y="9" width="6" height="6" />
+            <rect x="9" y="9" width="6" height="6" />
+          </svg>
+          Built at <em>NEAR</em> HACKATHON
+        </a>
+      </footer>
+    </div>
+    <noscript><p class="wrap">This playground needs JavaScript to call the gate. Nothing here can spend funds.</p></noscript>
+    <script>
+      const KEYS = ["amountUsd", "asset", "fromChain", "toChain", "fromProject", "toProject", "recipient", "rationale"];
+      const $ = (id) => document.getElementById(id);
+      const text = $("text");
+      const blurb = $("blurb");
+      const presetsEl = $("presets");
+      const results = $("results");
+      const runButton = $("run");
+      let presets = [];
+
+      function el(tag, className, value) {
+        const node = document.createElement(tag);
+        if (className) node.className = className;
+        if (value != null) node.textContent = value;
+        return node;
+      }
+
+      function extract(value) {
+        const trimmed = value.trim();
+        if (!trimmed) return null;
+        const tryParse = (source) => {
+          try { return JSON.parse(source); } catch { return null; }
+        };
+        let body = tryParse(trimmed);
+        if (!body) {
+          const fence = trimmed.match(/```(?:json)?\s*([\s\S]*?)```/i);
+          if (fence) body = tryParse(fence[1].trim());
+        }
+        if (!body) {
+          const start = trimmed.indexOf("{");
+          const end = trimmed.lastIndexOf("}");
+          if (start >= 0 && end > start) body = tryParse(trimmed.slice(start, end + 1));
+        }
+        if (!body || typeof body !== "object") return null;
+        return body.proposal && typeof body.proposal === "object" ? body.proposal : body;
+      }
+
+      function fillMove(move) {
+        for (const key of KEYS) {
+          const input = $(key);
+          const value = move && move[key] != null ? move[key] : "";
+          input.value = value === "" ? "" : String(value);
+        }
+      }
+
+      function selectPreset(preset) {
+        for (const button of presetsEl.querySelectorAll("button")) {
+          button.setAttribute("aria-pressed", button.dataset.id === preset.id ? "true" : "false");
+        }
+        text.value = preset.text;
+        fillMove(preset.move);
+        $("cooldown").checked = preset.simulateCooldown === true;
+        blurb.textContent = preset.blurb;
+      }
+
+      function renderPresets(list) {
+        presets = list;
+        presetsEl.replaceChildren();
+        for (const preset of list) {
+          const button = el("button", "preset", preset.label);
+          button.type = "button";
+          button.dataset.id = preset.id;
+          button.setAttribute("aria-pressed", "false");
+          button.addEventListener("click", () => selectPreset(preset));
+          presetsEl.append(button);
+        }
+        if (list[0]) selectPreset(list[0]);
+      }
+
+      text.addEventListener("input", () => {
+        const body = extract(text.value);
+        if (!body) return;
+        for (const key of KEYS) {
+          if (body[key] == null || typeof body[key] === "object") continue;
+          const input = $(key);
+          if (document.activeElement === input) continue;
+          input.value = String(body[key]);
+        }
+      });
+
+      function contractLink(id) {
+        if (typeof id !== "string" || !/^[a-z0-9][a-z0-9._-]{0,62}\.testnet$/.test(id)) return null;
+        const link = el("a", "", id);
+        link.href = "https://testnet.nearblocks.io/address/" + id;
+        link.rel = "noopener noreferrer";
+        link.target = "_blank";
+        return link;
+      }
+
+      function verdict(title, word, klass, reasons, extra) {
+        const card = el("article", "verdict" + (klass ? " " + klass : ""));
+        card.append(el("p", "kicker", title), el("p", "word", word));
+        if (extra) card.append(extra);
+        const list = document.createElement("ul");
+        for (const reason of reasons) list.append(el("li", "", reason));
+        if (list.childNodes.length) card.append(list);
+        return card;
+      }
+
+      function showError(message) {
+        results.replaceChildren(el("article", "share", ""));
+        results.firstChild.append(el("p", "", message));
+      }
+
+      function showResult(body) {
+        const share = el("article", "share");
+        share.append(el("p", "", body.share || "No share line."));
+        const actions = el("div", "share-actions");
+        const copy = el("button", "btn btn-ghost", "Copy");
+        copy.type = "button";
+        copy.addEventListener("click", async () => {
+          try {
+            await navigator.clipboard.writeText(body.share);
+            copy.textContent = "Copied";
+          } catch {
+            copy.textContent = "Select the line to copy";
+          }
+        });
+        const post = el("a", "btn btn-ghost", "Post on X");
+        post.href = "https://x.com/intent/post?text=" + encodeURIComponent(body.share + "\nhttps://sluice-one.vercel.app/play");
+        post.rel = "noopener noreferrer";
+        post.target = "_blank";
+        actions.append(copy, post);
+        share.append(actions);
+
+        const parser = el("p", "parser-line");
+        if (body.parser && body.parser.ok) {
+          parser.textContent = "Parser kept the move and dropped anything that is not a proposal field.";
+        } else {
+          parser.textContent = "Parser rejected the reply. " + ((body.parser && body.parser.error) || "");
+        }
+        if (Array.isArray(body.droppedFlags) && body.droppedFlags.length) {
+          parser.textContent += " Dropped: " + body.droppedFlags.join(", ") + ".";
+        }
+
+        const off = body.offChain || {};
+        const chain = body.contract || {};
+        const offExtra = el("p", "fine");
+        if (off.evaluated && off.netSpreadBps != null) {
+          offExtra.textContent = "Net " + off.netSpreadBps + " bps. Gross " + off.grossSpreadBps + " bps.";
+        } else if (!off.evaluated) {
+          offExtra.textContent = "The gate did not run.";
+        }
+        const chainExtra = el("p", "fine");
+        const link = contractLink(chain.contractId);
+        if (link) {
+          chainExtra.append(document.createTextNode("preview on "), link);
+        } else {
+          chainExtra.textContent = "Testnet preview.";
+        }
+        const cards = el("div", "verdicts");
+        const offWord = !off.evaluated ? "Not run" : off.approved ? "Approve" : "Veto";
+        const offClass = !off.evaluated ? "" : off.approved ? "yes" : "no";
+        const chainWord = !chain.available ? "Unavailable" : chain.approved ? "Approve" : "Veto";
+        const chainClass = !chain.available ? "" : chain.approved ? "yes" : "no";
+        cards.append(
+          verdict("Off-chain gate", offWord, offClass, off.reasons || [], offExtra),
+          verdict(
+            "NEAR contract",
+            chainWord,
+            chainClass,
+            chain.available ? chain.reasons || [] : [chain.error || "The contract check was unavailable."],
+            chainExtra,
+          ),
+        );
+        const pieces = [share, parser, cards];
+        if (body.note) pieces.push(el("p", "note", body.note));
+        pieces.push(el("p", "fine", "No signature. No broadcast. Testnet only."));
+        results.replaceChildren(...pieces);
+      }
+
+      $("form").addEventListener("submit", async (event) => {
+        event.preventDefault();
+        const move = {};
+        for (const key of KEYS) {
+          const value = $(key).value.trim();
+          if (key === "amountUsd") {
+            const cleaned = value.replace(/[$,\s]/g, "");
+            if (cleaned === "") move.amountUsd = "";
+            else if (Number.isFinite(Number(cleaned))) move.amountUsd = Number(cleaned);
+            else move.amountUsd = value;
+          } else {
+            move[key] = value;
+          }
+        }
+        runButton.disabled = true;
+        showError("Asking the gate and the testnet contract.");
+        try {
+          const response = await fetch("/api/trick", {
+            method: "POST",
+            headers: { "content-type": "application/json" },
+            body: JSON.stringify({ text: text.value, move, simulateCooldown: $("cooldown").checked }),
+          });
+          const body = await response.json();
+          if (!response.ok || !body.ok) showError(body.error || "The gate did not answer.");
+          else showResult(body);
+        } catch {
+          showError("The trick endpoint did not answer. The contract check was unavailable.");
+        } finally {
+          runButton.disabled = false;
+        }
+      });
+
+      fetch("/api/trick")
+        .then((response) => {
+          if (!response.ok) throw new Error("catalog " + response.status);
+          return response.json();
+        })
+        .then((body) => {
+          if (!body || !Array.isArray(body.presets)) throw new Error("catalog");
+          renderPresets(body.presets);
+        })
+        .catch(() => {
+          blurb.textContent = "The preset list did not load. You can still type a reply and run it.";
+        });
+    </script>
+  </body>
+</html>

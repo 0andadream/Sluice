@@ -1,0 +1,317 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Sluice Control</title>
+    <meta
+      name="description"
+      content="The agent proposes. The policy gate decides. Sluice shows the recorded USDC yield move, the vetoes, and a dry NEAR Intents quote."
+    />
+    <link rel="icon" href="/logo.svg" type="image/svg+xml" />
+    <link rel="canonical" href="https://sluice-one.vercel.app/control" />
+    <meta property="og:title" content="Sluice Control" />
+    <meta
+      property="og:description"
+      content="The agent proposes. The policy gate decides. A dry USDC yield move priced by NEAR Intents."
+    />
+    <meta property="og:type" content="website" />
+    <meta property="og:url" content="https://sluice-one.vercel.app/control" />
+    <meta property="og:image" content="https://sluice-one.vercel.app/og.png" />
+    <meta property="og:image:width" content="1200" />
+    <meta property="og:image:height" content="630" />
+    <meta name="twitter:card" content="summary_large_image" />
+    <meta name="twitter:title" content="Sluice Control" />
+    <meta
+      name="twitter:description"
+      content="The agent proposes. The policy gate decides. A dry USDC yield move priced by NEAR Intents."
+    />
+    <meta name="twitter:image" content="https://sluice-one.vercel.app/og.png" />
+    <meta name="theme-color" content="#14160f" />
+    <style>
+      :root {
+        color-scheme: dark;
+        --bg: #10120e;
+        --ink: #f3efe4;
+        --muted: #a39c8c;
+        --line: #2c3128;
+        --card: #181b15;
+        --open: #d6f25c;
+        --veto: #ff5d3a;
+        --water: #7ed0c2;
+      }
+      * { box-sizing: border-box; }
+      body {
+        margin: 0;
+        background:
+          radial-gradient(1200px 400px at 80% -10%, rgba(126, 208, 194, 0.16), transparent 50%),
+          var(--bg);
+        color: var(--ink);
+        font: 15px/1.45 ui-monospace, "SFMono-Regular", Menlo, Consolas, monospace;
+      }
+      main { max-width: 1080px; margin: 0 auto; padding: 28px 20px 64px; }
+      header { display: flex; justify-content: space-between; gap: 16px; align-items: end; flex-wrap: wrap; }
+      h1 { font-size: 42px; letter-spacing: -0.05em; margin: 0; font-weight: 650; }
+      h2 { font-size: 13px; letter-spacing: 0.14em; text-transform: uppercase; color: var(--muted); margin: 28px 0 10px; }
+      p { margin: 0; }
+      .age { color: var(--muted); text-align: right; }
+      .age strong { color: var(--ink); font-weight: 650; }
+      .stale { color: var(--veto); }
+      .hero, .card, .probe, .log {
+        background: var(--card);
+        border: 1px solid var(--line);
+        border-radius: 16px;
+      }
+      .hero { margin-top: 22px; padding: 22px; display: grid; gap: 14px; }
+      .hero.open { box-shadow: inset 4px 0 0 var(--open); }
+      .hero.veto { box-shadow: inset 4px 0 0 var(--veto); }
+      .kicker { color: var(--muted); letter-spacing: 0.12em; text-transform: uppercase; font-size: 12px; }
+      .amount { font-size: 34px; letter-spacing: -0.04em; }
+      .route { font-size: 18px; }
+      .stats { display: flex; flex-wrap: wrap; gap: 8px 16px; color: var(--muted); }
+      .pair { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; margin-top: 12px; }
+      .pair article { padding: 16px; border-radius: 14px; background: #12140f; border: 1px solid var(--line); }
+      .pair .num { font-size: 28px; letter-spacing: -0.04em; }
+      table { width: 100%; border-collapse: collapse; }
+      th, td { text-align: left; padding: 8px 6px; border-bottom: 1px solid var(--line); vertical-align: top; }
+      th { color: var(--muted); font-weight: 500; }
+      .probes, .logs { display: grid; gap: 8px; }
+      .probe, .log { padding: 12px 14px; }
+      .probe b, .tag { letter-spacing: 0.08em; text-transform: uppercase; font-size: 12px; }
+      .tag.open, .yes { color: var(--open); }
+      .tag.veto, .no { color: var(--veto); }
+      button {
+        background: var(--open);
+        color: #14160f;
+        border: 0;
+        border-radius: 999px;
+        padding: 12px 18px;
+        font: inherit;
+        font-weight: 700;
+        cursor: pointer;
+      }
+      button:disabled { opacity: 0.6; cursor: wait; }
+      #quote-result { margin-top: 12px; color: var(--muted); white-space: pre-wrap; }
+      a { color: var(--water); }
+      .nav { display: flex; flex-wrap: wrap; gap: 8px 16px; align-items: center; margin-bottom: 18px; color: var(--muted); }
+      .nav a { color: var(--muted); text-decoration: none; }
+      .nav a:hover, .nav a[aria-current="page"] { color: var(--ink); }
+      .brand { display: inline-flex; align-items: center; gap: 8px; color: var(--ink); font-weight: 650; }
+      .mark {
+        width: 18px;
+        height: 24px;
+        background: var(--ink);
+        -webkit-mask: url("/logo.svg") center / contain no-repeat;
+        mask: url("/logo.svg") center / contain no-repeat;
+      }
+      footer { margin-top: 28px; color: var(--muted); }
+      @media (max-width: 700px) {
+        h1 { font-size: 32px; }
+        .pair { grid-template-columns: 1fr; }
+        .age { text-align: left; }
+      }
+    </style>
+  </head>
+  <body>
+    <main>
+      <p class="nav">
+        <a class="brand" href="/"><span class="mark" role="img" aria-label="Sluice"></span>Sluice</a>
+        <a href="/#how">How it works</a>
+        <a href="/play">Play</a>
+        <a href="/control" aria-current="page">Control</a>
+        <a href="https://github.com/0andadream/Sluice">GitHub</a>
+      </p>
+      <header>
+        <div>
+          <p class="kicker">Sluice control</p>
+          <h1>The gate decides.</h1>
+        </div>
+        <p class="age" id="age">Loading the snapshot.</p>
+      </header>
+      <section class="hero" id="hero"></section>
+      <div class="pair" id="pair"></div>
+      <h2>Yields</h2>
+      <div class="card" style="padding: 8px 12px; overflow-x: auto"><table id="yields"></table></div>
+      <h2>Dry quote</h2>
+      <section class="card" id="quote" style="padding: 16px"></section>
+      <h2>What the gate refuses</h2>
+      <div class="probes" id="probes"></div>
+      <h2>Decisions</h2>
+      <div class="logs" id="logs"></div>
+      <h2>On-chain gate</h2>
+      <section class="card" id="gate" style="padding: 16px"></section>
+      <h2>Run a live dry quote</h2>
+      <p>Posts to this server. The request is dry. It cannot name a recipient. No deposit address is requested.</p>
+      <p style="margin-top: 12px"><button id="run" type="button">Run live dry quote</button></p>
+      <div id="quote-result"></div>
+      <footer id="foot"></footer>
+    </main>
+    <script>
+      const $ = (id) => document.getElementById(id);
+      const text = (el, value) => {
+        el.textContent = value ?? "";
+      };
+      function el(tag, className, value) {
+        const node = document.createElement(tag);
+        if (className) node.className = className;
+        if (value != null) node.textContent = value;
+        return node;
+      }
+      function money(amount) {
+        return Number(amount).toLocaleString("en-US", { style: "currency", currency: "USD" });
+      }
+      function age(seconds) {
+        if (seconds == null) return "unknown age";
+        const days = Math.floor(seconds / 86400);
+        const hours = Math.floor((seconds % 86400) / 3600);
+        if (days > 0) return `${days}d ${hours}h`;
+        const minutes = Math.floor((seconds % 3600) / 60);
+        if (hours > 0) return `${hours}h ${minutes}m`;
+        return `${minutes}m`;
+      }
+      function render(state) {
+        const old = (state.ageSeconds ?? 0) > 86400;
+        const ageNode = $("age");
+        ageNode.replaceChildren(
+          el("span", old ? "stale" : "", `Snapshot ${age(state.ageSeconds)} old`),
+          document.createElement("br"),
+          el("strong", "", state.fetchedAt ?? ""),
+        );
+        const decision = state.decision;
+        const hero = $("hero");
+        hero.className = `hero ${decision.approved ? "open" : "veto"}`;
+        const payback =
+          decision.paybackDays != null && Number.isFinite(decision.paybackDays)
+            ? `${decision.paybackDays.toFixed(1)}d`
+            : "no payback";
+        hero.replaceChildren(
+          el("div", "kicker", decision.approved ? "Gate open" : "Gate veto"),
+          el("div", "amount", `${money(state.proposal.amountUsd)} ${state.proposal.asset}`),
+          el(
+            "div",
+            "route",
+            `${state.proposal.fromChain} / ${state.proposal.fromProject} → ${state.proposal.toChain} / ${state.proposal.toProject}`,
+          ),
+          el(
+            "div",
+            "stats",
+            `gross ${decision.grossSpreadBps} bps · fee ${decision.feeBps} bps · net ${decision.netSpreadBps} bps · payback ${payback} · ${state.brainSource}`,
+          ),
+        );
+        const best = state.book.bestByChain ?? {};
+        const pair = $("pair");
+        pair.replaceChildren();
+        for (const [label, chain] of [
+          ["Stay", state.proposal.fromChain],
+          ["Move", state.proposal.toChain],
+        ]) {
+          const venue = best[chain];
+          const card = el("article");
+          card.append(
+            el("div", "kicker", label),
+            el("div", "num", venue ? `${venue.decisionApy}%` : "none"),
+            el("div", "", venue ? `${venue.project} · ${venue.chain}` : chain),
+          );
+          pair.append(card);
+        }
+        const table = $("yields");
+        table.replaceChildren();
+        const head = document.createElement("tr");
+        for (const name of ["Chain", "Venue", "apyBase", "apy", "TVL"]) head.append(el("th", "", name));
+        table.append(head);
+        for (const venue of state.book.candidates ?? []) {
+          const row = document.createElement("tr");
+          const tvl =
+            venue.tvlUsd >= 1e6 ? `$${(venue.tvlUsd / 1e6).toFixed(2)}m` : money(venue.tvlUsd);
+          for (const value of [
+            venue.chain,
+            `${venue.project}${venue.poolMeta ? " " + venue.poolMeta : ""}`,
+            venue.apyBase ?? "n/a",
+            venue.apy ?? "n/a",
+            tvl,
+          ]) {
+            row.append(el("td", "", String(value)));
+          }
+          table.append(row);
+        }
+        const quote = state.quote?.quote ?? {};
+        const quoteCard = $("quote");
+        quoteCard.replaceChildren(
+          el("div", "", `In ${quote.amountInFormatted ?? "n/a"} · out ${quote.amountOutFormatted ?? "n/a"} · worst case ${state.lossBps} bps`),
+          el("div", "", `Quote gate ${state.quoteDecision?.approved ? "open" : "veto"}. Deposit address absent. Correlation ${state.quote?.correlationId ?? ""}.`),
+        );
+        const probes = $("probes");
+        probes.replaceChildren();
+        for (const probe of state.probes ?? []) {
+          const card = el("article", "probe");
+          card.append(
+            el("div", probe.decision.approved ? "tag open" : "tag veto", probe.decision.approved ? "Approve" : "Veto"),
+            el("b", "", probe.title),
+            el("div", "", (probe.decision.reasons ?? []).join(" ") || "no reason"),
+          );
+          probes.append(card);
+        }
+        const logs = $("logs");
+        logs.replaceChildren();
+        for (const item of state.decisions ?? []) {
+          const card = el("article", "log");
+          card.append(
+            el("div", item.approved ? "yes" : "no", `${item.approved ? "Approved" : "Veto"} · ${item.at} · ${item.source}`),
+            el("div", "", item.summary),
+          );
+          if (item.explorerUrl) {
+            const link = el("a", "", "Explorer");
+            link.href = item.explorerUrl;
+            card.append(link);
+          } else {
+            card.append(el("div", "", "No transaction."));
+          }
+          logs.append(card);
+        }
+        const gate = $("gate");
+        if (state.gate?.contractId) {
+          gate.replaceChildren(el("div", "", state.gate.contractId));
+          const link = el("a", "", "Contract on the explorer");
+          link.href = state.gate.explorerAccount;
+          gate.append(link);
+        } else {
+          text(gate, "No deployed contract id is recorded in this build. The contract tests run locally.");
+        }
+        text(
+          $("foot"),
+          "Built at NEAR HACKATHON. This page reads the recorded book. It does not sign or spend.",
+        );
+      }
+      fetch("/api/state")
+        .then((response) => {
+          if (!response.ok) throw new Error(`state ${response.status}`);
+          return response.json();
+        })
+        .then(render)
+        .catch((error) => {
+          text($("age"), error.message);
+        });
+      $("run").addEventListener("click", async () => {
+        const button = $("run");
+        const out = $("quote-result");
+        button.disabled = true;
+        text(out, "Requesting a dry quote.");
+        try {
+          const response = await fetch("/api/dry-quote", { method: "POST" });
+          const body = await response.json();
+          if (!body.ok) text(out, body.error || "Dry quote was not requested.");
+          else {
+            text(
+              out,
+              `Correlation ${body.correlationId}. In ${body.amountInFormatted}, out ${body.amountOutFormatted}. Gate ${body.approved ? "open" : "veto"}. Deposit address absent.`,
+            );
+          }
+        } catch (error) {
+          text(out, error.message);
+        } finally {
+          button.disabled = false;
+        }
+      });
+    </script>
+  </body>
+</html>
